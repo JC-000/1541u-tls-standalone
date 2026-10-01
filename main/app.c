@@ -591,7 +591,7 @@ static const case_t cases[] = {
     { "github",      "github.com", 443, "github.com", "/robots.txt", BUNDLE, 0, NULL, NIOS, OK(0x0304) },
     { "example",     "example.com", 443, "example.com", "/", BUNDLE, 0, NULL, NIOS, OK(0x0304) },
     { "gnu-rsa2048", "www.gnu.org", 443, "www.gnu.org", "/robots.txt", BUNDLE, 0, NULL, NIOS, OK(0x0304) },
-    { "debian-rsa4096", "www.debian.org", 443, "www.debian.org", "/robots.txt", BUNDLE, 0, NULL, NIOS, OK(0x0304) },
+    { "debian-rsa4096", "www.debian.org", 443, "www.debian.org", "/", BUNDLE, 0, NULL, NIOS, OK(0x0304) },
     { "c64wiki-tls12", "www.c64-wiki.com", 443, "www.c64-wiki.com", "/wiki/C64", BUNDLE, 0, NULL, NIOS, OK(0x0303) },
     { "craigslist-tls12", "www.craigslist.org", 443, "www.craigslist.org", "/robots.txt", BUNDLE, 0, NULL, NIOS, OK(0x0303) },
     { "badssl-no-ems", "tls-v1-2.badssl.com", 1012, "tls-v1-2.badssl.com", "/", BUNDLE, 0, NULL, NIOS,
