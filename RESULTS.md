@@ -6,7 +6,7 @@ same host, with host load. Use the timings only to compare cases.
 ## Current
 | | |
 |---|---|
-| Engine | `ENGINE_SHA` 756b77fd3436dfdde26e0ec620d31fcd5401a013, on the `esp32-tls-offload` branch of https://github.com/JC-000/1541ultimate.git; unmodified (checked at configure and at every build) |
+| Engine | `ENGINE_SHA` 756b77fd3436dfdde26e0ec620d31fcd5401a013, on the `esp32-tls-offload` branch of https://github.com/JC-000/1541ultimate.git (also tag `esp32-tls-offload-v1`); unmodified (checked at configure and at every build) |
 | `tls_engine.c` sha256 | `7eca3394476cde5797c705be87dd3453e7205e61f09b63bee82c1eba56644b9e` |
 | `tls_engine.h` sha256 | `4555ce75501aefe0277417e6c0646e69154b35ccd2ee502bd6003d8eec0bab9a` |
 | Hand copies | `tools/verify_transcriptions.py`: ok. `rpc_dispatch.c`, `wifi_tls.cc` and `network_target.cc` equal their references, the copies differ only by the declared deltas, and the 5 copied constants match |

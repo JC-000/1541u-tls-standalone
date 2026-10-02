@@ -52,7 +52,10 @@ starts from the bridge's sdkconfig.
 
 ### Which engine, and re-pointing it
 `engine.env` holds `ENGINE_URL` and `ENGINE_SHA`.
-- `ENGINE_URL` is https://github.com/JC-000/1541ultimate.git; `ENGINE_SHA` is on its `esp32-tls-offload` branch.
+- `ENGINE_URL` is https://github.com/JC-000/1541ultimate.git; `ENGINE_SHA` is on its `esp32-tls-offload` branch and
+  is also tagged `esp32-tls-offload-v1` (`ENGINE_TAG`). `ENGINE_SHA` stays the pin: `tools/fetch_engine.sh` fetches by
+  commit, falls back to the tag if the commit is no longer reachable from a branch, and in both cases requires the
+  checkout to be exactly `ENGINE_SHA`.
   `ENGINE_URL_ENV=<clone or url>` overrides the URL (a mirror or a local clone).
 - `tools/fetch_engine.sh` fetches that commit into `./engine` (sparse, depth 1).
 - `tools/check_engine.cmake` refuses a checkout at another commit, or one with any file changed or added (ignored

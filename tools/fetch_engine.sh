@@ -12,8 +12,16 @@ rm -rf engine
 git init -q engine
 git -C engine sparse-checkout set software/wifi software/io/uart software/io/wifi software/io/network tools/ca_store
 git -C engine remote add source "$URL"
-git -C engine fetch -q --depth 1 --filter=blob:none source "$ENGINE_SHA"
-git -C engine -c advice.detachedHead=false checkout -q FETCH_HEAD
-test "$(git -C engine rev-parse HEAD)" = "$ENGINE_SHA"
+# By commit; if that commit is no longer reachable from a branch, by ENGINE_TAG, which must name the same commit
+# (ENGINE_FETCH_BY_TAG=1 takes the tag path directly)
+TARGET=FETCH_HEAD
+if [ -n "${ENGINE_FETCH_BY_TAG:-}" ] || ! git -C engine fetch -q --depth 1 --filter=blob:none source "$ENGINE_SHA"; then
+    echo "fetching tag ${ENGINE_TAG:?no ENGINE_TAG in engine.env}" >&2
+    git -C engine fetch -q --depth 1 --filter=blob:none source "refs/tags/$ENGINE_TAG:refs/tags/$ENGINE_TAG"
+    TARGET="refs/tags/$ENGINE_TAG^{commit}"
+fi
+git -C engine -c advice.detachedHead=false checkout -q "$TARGET"
+HEAD_SHA=$(git -C engine rev-parse HEAD)
+[ "$HEAD_SHA" = "$ENGINE_SHA" ] || { echo "fetched $HEAD_SHA, not ENGINE_SHA $ENGINE_SHA" >&2; exit 1; }
 echo "engine: $ENGINE_SHA"
 (cd engine/software/wifi/raw_u64/main && sha256sum tls_engine.c tls_engine.h 2>/dev/null || shasum -a 256 tls_engine.c tls_engine.h)
