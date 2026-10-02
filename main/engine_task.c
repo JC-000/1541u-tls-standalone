@@ -7,7 +7,7 @@
  * engine sees the same buffers: in particular STEP's reply overlays its request (resp->data at +20, req->data at +12).
  *
  * Origin: those handlers are transcribed from software/wifi/raw_u64/main/rpc_dispatch.c of the 1541 Ultimate
- * firmware (GideonZ/1541ultimate, GPL-3.0); tools/verify_transcriptions.py checks them against the engine commit.
+ * firmware (GideonZ/1541ultimate, GPL-3.0-or-later); tools/verify_transcriptions.py checks them against the engine commit.
  */
 
 #include <stddef.h>

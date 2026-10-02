@@ -38,7 +38,8 @@ CONSTANTS = [
     ("software/io/network/network_target.cc", "TLS_READ_BUDGET_STEPS", None, None),
     ("software/wifi/raw_u64/main/rpc_dispatch.h", "TLS_TASK_STACK", "main/engine_task.h", "TLS_TASK_STACK"),
 ]
-HEADER = ("# Origin: %s of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0; comments and layout removed.\n"
+HEADER = ("# Origin: %s of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0-or-later; comments and layout\n"
+          "# removed.\n"
           "# Written by tools/verify_transcriptions.py --update; the reference the app's copy was made from.\n")
 
 

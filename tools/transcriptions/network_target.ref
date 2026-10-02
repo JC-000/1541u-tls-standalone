@@ -1,4 +1,5 @@
-# Origin: software/io/network/network_target.cc of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0; comments and layout removed.
+# Origin: software/io/network/network_target.cc of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0-or-later; comments and layout
+# removed.
 # Written by tools/verify_transcriptions.py --update; the reference the app's copy was made from.
 int NetworkTarget :: tls_run_step(TlsSocket *e, void *step, uint32_t deadline, bool use_deadline)
 {

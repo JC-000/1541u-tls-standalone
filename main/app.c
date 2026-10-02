@@ -8,12 +8,12 @@
  * wifi_tls_take_step() does, and pumps the session as network_target.cc's tls_handshake(), tls_read() and
  * tls_write() do (all in the engine commit, engine.env).
  *
- * Origin: take_step() is transcribed from wifi_tls_take_step() in software/io/wifi/wifi_tls.cc, and the pump is
- * ported from software/io/network/network_target.cc, of the 1541 Ultimate firmware (GideonZ/1541ultimate, GPL-3.0).
- * tools/verify_transcriptions.py checks both against the engine commit.
+ * Origin: take_step() is transcribed from wifi_tls_take_step() in software/io/wifi/wifi_tls.cc, and the pump is ported
+ * from software/io/network/network_target.cc, of the 1541 Ultimate firmware (GideonZ/1541ultimate, GPL-3.0-or-later).
+ * tools/verify_transcriptions.py checks take_step() against the engine commit and pins the pump's firmware source.
  *
- * Every case prints one RESULT line and one CASE line, PASS or FAIL against its expectation. The local-server
- * cases are the gate (VERDICT); the public hosts are informational, as they change without the engine changing.
+ * Every case prints one RESULT line and one CASE line, PASS or FAIL against its expectation. The gate (VERDICT) is
+ * the local-server cases plus bundle-wronghost; the other public hosts are informational, as they change by themselves.
  */
 
 #include <stddef.h>

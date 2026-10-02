@@ -7,8 +7,8 @@ ESP-IDF 6.0.3) plus the engine, with no Ultimate code linked. It makes real outg
 every byte that comes back. It measures handshake time, throughput, heap and stack.
 
 ## Why
-GideonZ/1541ultimate#936 is another contributor's HTTPS pull request. On it, Gideon set this condition for TLS work
-in the Ultimate ([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5876427638)):
+GideonZ/1541ultimate#936 is another contributor's HTTPS pull request. On it, Gideon set this condition before
+integrating that pull request's TLS work ([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5876427638)):
 
 > Let's not integrate this at all, until it is completely stable in a test project that doesn't have anything
 > ultimate related. Just FreeRTOS, lwIP and the TLS additions, combined with an outgoing request and possibly an
@@ -21,8 +21,8 @@ We apply that condition to our own engine. This app **addresses the isolation pa
 - the measurements are taken.
 
 Gideon's comment can also be read as asking for TLS on the Ultimate's own CPU, with no ESP32 at all. This app does
-not answer that reading. We intend to ask him which one he meant, in the project's issue tracker. (He also wrote that he "would personally opt for
-the mbedtls library and not try to create anything ourselves"
+not answer that reading. We intend to ask him which one he meant, in the project's issue tracker. (He also wrote
+that he "would personally opt for the mbedtls library and not try to create anything ourselves"
 ([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5890938239)); the engine uses stock
 mbedTLS.)
 
@@ -147,7 +147,9 @@ be reached (no network for `bundle-wronghost`); it is never GREEN.
   `bundle-wronghost`. The BUNDLE trust mode has its own branch in the engine's verify callback, and only a
   Mozilla-trusted server can reach it, so that case connects to en.wikipedia.org with the wrong name
   (`nomatch.invalid`) and requires exactly `verify_flags` 0x04 (name mismatch, chain trusted). Without the network
-  that case cannot run and the VERDICT is INCONCLUSIVE. VERDICT is GREEN only if every gate case passes.
+  that case cannot run and the VERDICT is INCONCLUSIVE. If Wikipedia's chain ever stops being trusted by the pinned
+  Mozilla store, this case goes RED for a correct engine: check its `verify` value (0x0C rather than 0x04) before
+  suspecting the engine. VERDICT is GREEN only if every gate case passes.
 - **Info cases** are public hosts. They are informational, because a host can change its certificate, its TLS
   versions or its replies without the engine changing.
 - **A success case passes only if all of these hold:**
@@ -313,7 +315,8 @@ This repository is licensed **GPL-3.0-or-later**; the full text is in `LICENSE`.
 `SPDX-License-Identifier` line.
 
 Parts that come from elsewhere keep their own terms:
-- **From the 1541 Ultimate firmware** (GideonZ/1541ultimate, GPL-3.0):
+- **From the 1541 Ultimate firmware** ([GideonZ/1541ultimate](https://github.com/GideonZ/1541ultimate),
+  GPL-3.0-or-later):
   - `main/engine_task.c`'s handlers (from `rpc_dispatch.c`);
   - `take_step()` and the pump in `main/app.c` (from `wifi_tls.cc` and `network_target.cc`);
   - `tools/transcriptions/*.ref`, which are verbatim firmware functions with comments and layout removed.
@@ -321,6 +324,10 @@ Parts that come from elsewhere keep their own terms:
   Each carries an origin note.
 - **The engine itself** (`tls_engine.c`/`.h` and the headers and Mozilla store beside it) is not in this
   repository. It is fetched from the firmware at build time, under the firmware's licence.
-- **ESP-IDF and mbedTLS** (in the container image, linked into the image): Apache-2.0.
-- **The Mozilla root store** (`cacert.pem`, fetched with the engine): MPL-2.0.
+- **ESP-IDF and its components** (in the container image, linked into the built image; none is in this repository)
+  keep their own licences: ESP-IDF and mbedTLS
+  [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0); the FreeRTOS kernel MIT; lwIP BSD-3-Clause; the C
+  library and Espressif's prebuilt Wi-Fi/PHY libraries their own terms. ESP-IDF's
+  [copyright notes](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/COPYRIGHT.html) list them.
+- **The Mozilla root store** (`cacert.pem`, fetched with the engine): [MPL-2.0](https://mozilla.org/MPL/2.0/).
 - **`certs/`** is generated test material (`tools/mkcerts.sh`).

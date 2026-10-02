@@ -1,4 +1,5 @@
-# Origin: software/wifi/raw_u64/main/rpc_dispatch.c of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0; comments and layout removed.
+# Origin: software/wifi/raw_u64/main/rpc_dispatch.c of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0-or-later; comments and layout
+# removed.
 # Written by tools/verify_transcriptions.py --update; the reference the app's copy was made from.
 void cmd_tls_open(command_buf_t *buf)
 {
