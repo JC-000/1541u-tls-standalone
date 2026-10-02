@@ -6,12 +6,12 @@ same host, with host load. Use the timings only to compare cases.
 ## Current
 | | |
 |---|---|
-| Engine | `ENGINE_SHA` 756b77fd3436dfdde26e0ec620d31fcd5401a013 (`esp32-tls-offload`), unmodified (checked at configure and at every build) |
+| Engine | `ENGINE_SHA` 756b77fd3436dfdde26e0ec620d31fcd5401a013, on the `esp32-tls-offload` branch of https://github.com/JC-000/1541ultimate.git; unmodified (checked at configure and at every build) |
 | `tls_engine.c` sha256 | `7eca3394476cde5797c705be87dd3453e7205e61f09b63bee82c1eba56644b9e` |
 | `tls_engine.h` sha256 | `4555ce75501aefe0277417e6c0646e69154b35ccd2ee502bd6003d8eec0bab9a` |
 | Hand copies | `tools/verify_transcriptions.py`: ok. `rpc_dispatch.c`, `wifi_tls.cc` and `network_target.cc` equal their references, the copies differ only by the declared deltas, and the 5 copied constants match |
 | Container image | `espressif/idf@sha256:da1f22c157dcb4f684f822ff37be17dc0abef82160d889bfd7fd23cc1299f0fa` (v6.0.3, arm64): ESP-IDF v6.0.3, mbedTLS 4.1.1, QEMU 9.2.2 (esp_develop_9.2.2_20260417); OpenSSL 3.0.13 and Python for the servers |
-| `tls_standalone.bin` | `afcc36eab64e59f13fe79b118df78a13442641e9df2d1efd265c36784b6f5d6d`, the same from the working repo and from a fresh clone |
+| `tls_standalone.bin` | `afcc36eab64e59f13fe79b118df78a13442641e9df2d1efd265c36784b6f5d6d`, the same in four builds: the working repo, a fresh clone, a clone of the published branch only, and a fresh clone whose engine was fetched from the public URL |
 
 **What the image hash depends on.** It is a function of this repository's sources, the engine commit, the container
 image digest and the architecture (arm64 here). The app version is fixed (`PROJECT_VER`) and the build is
@@ -24,6 +24,7 @@ Any other engine commit must be run again before it is cited.
 |---|---|---|---|---|
 | clean | 18/18 | 9/9 | GREEN | GREEN: ok |
 | clean, from a fresh clone | 18/18 | 9/9 | GREEN | GREEN: ok |
+| clean, fresh clone, engine fetched from the public URL (no override) | 18/18 | 9/9 | GREEN | GREEN: ok |
 | mut1: drops plaintext after 4 KiB | 12/18 | 5/9 | RED | RED: ok |
 | mut2: output written before the input is consumed | 3/18 | 1/9 | RED | RED: ok |
 | m3b: last record before close_notify dropped | 12/18 | 4/9 | RED | RED: ok |
