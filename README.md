@@ -233,16 +233,20 @@ repository's commit. RESULTS.md says whether two builds gave the same `tls_stand
 
 **QEMU timings are not hardware timings.** QEMU does not model the ESP32's clock, and the crypto accelerators are
 QEMU models. Treat every time as a comparison between cases only. Between our runs, the same case varied by up to
-4.4x with host load.
+4.4x with host load. RESULTS.md has dev-board timings.
 
 **The QEMU heap has no Wi-Fi driver.** The firmware runs Wi-Fi and its buffers, so its free heap and its
 fragmentation differ. Of the heap figures, only the per-session use (peak minus baseline) carries over, and even
 that includes lwIP's open_eth buffers. The stack figure is the worst of the cases run, without silicon interrupt
 nesting.
 
+On a dev board the Wi-Fi driver takes about 25 KB more: free heap is 166.6 KB at the start and 61.0 KB at the worst
+point. The per-session use agrees with QEMU within about 2 KB.
+
 ## Limits (what the gate does not catch)
 - **Refused handshake steps** (`ESP_ERR_NO_MEM` while handshaking) never happen here, so a bug there stays GREEN (`m8c`).
-- **Write-side NO_MEM resends.** Only the READ side's resends run (240 per 256 KiB download).
+- **Write-side NO_MEM resends.** Only the READ side's resends run: 240 per 256 KiB download in QEMU, and 123-223 on a
+  dev board, depending on how the data arrives.
 - **Name and expiry checks.**
   - Expiry is checked under CUSTOM trust only, the name under CUSTOM and BUNDLE.
   - PIN has only its wrong-key case.
@@ -251,20 +255,30 @@ nesting.
 - **Public-host bodies** are checked by length, not content.
 - **Robustness:** HelloRetryRequest, P-384/P-521 key exchange, soak, repetition and fault injection (resets,
   truncated records, slow peers).
-- **The firmware context:** the UART, the queue's busy path, and anything on hardware.
+- **The firmware context:** the UART, the queue's busy path, and the Ultimate's hardware. The engine has run on a
+  classic ESP32 dev board, but not inside an Ultimate.
 
-## Run on a classic ESP32 dev board (not done yet)
+## Run on a classic ESP32 dev board
 The same image runs on a classic ESP32 (ESP32-D0WD, 4 MB flash; the U64's module is a classic ESP32) over Wi-Fi.
+It was run on an ESP32-D0WD-V3 (revision v3.1, 4 MB) devkit:
+- the clean engine was GREEN twice and all seven required mutants were RED, each with the same per-case results as
+  in QEMU (RESULTS.md);
+- the build is the QEMU build: nothing board-specific is compiled in, and the image hash is the same.
+
 The app reads its settings from NVS (namespace `standalone`):
-- `ssid` and `pass`: with no credentials it takes the QEMU path;
+- `ssid` and `pass`: with no `ssid` it takes the QEMU path. For an open network, leave out the `pass` row;
 - `local`: the LAN host running the servers;
-- `ntp` (optional): the default is pool.ntp.org.
+- `ntp` (optional): the default is pool.ntp.org. The board always asks port 123: lwIP's SNTP client has a fixed
+  port (inferred from lwIP's `SNTP_PORT`; not tested), and NVS `ntp` names a host, not a port.
 
 On a board the entropy gate is real: `entropy_source()` reports RADIO only after `esp_wifi_start()` succeeds.
 
-1. On a LAN host with OpenSSL 3 and python3, as root for UDP 123 (or set `NTP_PORT` and NVS `ntp`), run
-   `tools/servers.sh start /tmp/srv`.
-2. Write the NVS image:
+1. On a LAN host with OpenSSL 3 and python3, run `tools/servers.sh start /tmp/srv`. The SNTP server needs UDP 123:
+   - on Linux that needs root (or leave `ntp` at pool.ntp.org and ignore the local SNTP server);
+   - macOS lets any user bind it.
+
+   The board must reach TCP 8443-8450 and UDP 123 on that host (check its firewall).
+2. Write the NVS image (`pip install esp-idf-nvs-partition-gen`, or use the one in `$IDF_PATH`):
    ```
    cat > nvs.csv <<EOF
    key,type,encoding,value
@@ -274,18 +288,24 @@ On a board the entropy gate is real: `entropy_source()` reports RADIO only after
    local,data,string,<LAN host IP>
    ntp,data,string,<LAN host IP or pool.ntp.org>
    EOF
-   python $IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py generate nvs.csv nvs.bin 0x6000
+   python -m esp_idf_nvs_partition_gen generate nvs.csv nvs.bin 0x6000
    ```
-3. Flash the image built above and the NVS image (`nvs` is at 0x9000 in the single-app-large table; check it in
-   `build/partition_table`):
+3. Flash the image built above and the NVS image (`nvs` is at 0x9000 in the single-app-large table). On a board
+   that ran other firmware, run `erase-flash` first, so that no old NVS is left:
    ```
    python -m esptool --chip esp32 -p <port> -b 460800 write-flash --flash-mode dio --flash-size 4MB --flash-freq 40m \
        0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin \
        0x10000 build/tls_standalone.bin 0x9000 nvs.bin
    ```
-4. Capture the console at 115200 baud until `STANDALONE_DONE`, then run
-   `grep -E '^(RESULT|CASE|SUMMARY|VERDICT)' log > results.txt; tools/results.py results.txt`.
+   Every region must end with "Hash of data verified".
+4. Reset the board and capture the console at 115200 baud until `STANDALONE_DONE` (about 80-90 s for the clean
+   engine). Then run:
+   `grep -aE '^(RESULT|CASE|SUMMARY|VERDICT|CLOCK|HEAP|NET|1541u-tls|\*\*\* MUTANT)' log > results.txt; tools/results.py results.txt`.
+   The `-a` is needed: the log starts with the boot ROM's bytes, and without it grep treats the file as binary and
+   prints nothing.
 5. Stop the servers: `tools/servers.sh stop /tmp/srv`.
+
+A mutant is built as in QEMU (`MUTANT=<name>`; `tools/mutate.py`) and flashed the same way.
 
 ## Cases
 - **Info (public hosts, Mozilla bundle):**
@@ -312,6 +332,9 @@ nothing. **Never install `certs/ca.pem` in a trust store.**
 
 ## Results
 See `RESULTS.md`, which records which run, which engine and which image produced them.
+
+## How this was made
+Developed with Claude Code using Claude Opus 5.5, mostly at its default effort level (medium, per Anthropic's effort documentation: https://platform.claude.com/docs/en/build-with-claude/effort); the final adversarial review rounds ran at high effort. Design decisions and review of every change were made by the author. The engine code tested here is the same, apart from comments, as firmware that passed its end-to-end tests on an Ultimate 64 Elite; this app's own results come from QEMU and from a classic ESP32 dev board (ESP32-D0WD-V3).
 
 ## Licence
 This repository is licensed **GPL-3.0-or-later**; the full text is in `LICENSE`. Every source file carries an
