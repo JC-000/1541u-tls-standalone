@@ -19,6 +19,9 @@ fi
 { idf.py --version; openssl version; qemu-system-xtensa --version | head -1; uname -m;
   echo "engine $(git -C engine rev-parse HEAD)"; } > "$LOG/versions.txt" 2>&1
 python3 tools/make_sdkconfig.py > "$LOG/make_sdkconfig.txt"
+# GCC takes __DATE__/__TIME__ from it: the engine's clock floor (tls_build_time()) is then the commit's date
+export SOURCE_DATE_EPOCH=$(git -C engine log -1 --format=%ct)
+echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> "$LOG/versions.txt"
 rm -rf build
 idf.py build > "$LOG/build.log" 2>&1
 echo "BUILD_EXIT $?" | tee -a "$LOG/build.log"
@@ -40,9 +43,9 @@ done
 sleep 2
 pkill -f qemu-system-xtensa; kill $QPID 2>/dev/null
 tools/servers.sh stop "$LOG"
-pkill -f "openssl s_server"; pkill -f noems_server.py; pkill -f sntp_server.py
+pkill -f "openssl s_server"; pkill -f noems_server.py; pkill -f sntp_server.py; pkill -f app_server.py
 sleep 1
-pgrep -fa "qemu-system|s_server|noems|sntp_server" > "$LOG/leftover-processes.txt" || echo "none" > "$LOG/leftover-processes.txt"
+pgrep -fa "qemu-system|s_server|noems|sntp_server|app_server" > "$LOG/leftover-processes.txt" || echo "none" > "$LOG/leftover-processes.txt"
 tr -d '\r' < "$LOG/qemu-raw.log" > "$LOG/qemu.log"
 grep -E "^(RESULT|CASE|SUMMARY|VERDICT|CLOCK|HEAP|NET|1541u-tls|\*\*\* MUTANT)" "$LOG/qemu.log" > "$LOG/results.txt"
 python3 tools/results.py "$LOG/results.txt" > "$LOG/results.md"

@@ -18,6 +18,10 @@ DELTA = {
     "CONFIG_ETH_USE_OPENETH": "y",
     # The largest single allocation on the TLS task (engine_task.c)
     "CONFIG_HEAP_USE_HOOKS": "y",
+    # The same image from the same sources: paths mapped, no build time in the app header; __DATE__/__TIME__ come
+    # from SOURCE_DATE_EPOCH (tools/run_qemu.sh sets it to the engine commit's time)
+    "CONFIG_APP_REPRODUCIBLE_BUILD": "y",
+    "CONFIG_APP_COMPILE_TIME_DATE": None,
     # The same store, reached from this project
     "CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH": '"engine/software/wifi/ca_store/cacert.pem"',
 }

@@ -37,7 +37,7 @@
 #include "pins.h"
 #include "blob.h"
 
-#define APP_VERSION      "2"
+#define APP_VERSION      "3"
 #define CLIENT_STACK     16384
 #define CT_ROOM          1536  // network_target.h:70,152 (NET_TLS_CT_MAX, tls_ct_out)
 #define PT_ROOM          1024  // network_target.h:71,153 (NET_TLS_PT_MAX, tls_pt)
@@ -47,11 +47,13 @@
 #define TOTAL_MS         240000
 #define ANY              -1
 #define CA_TAG           0x5a5a
+#define WRITE_CHUNK      892   // plaintext per WRITE, about one UCI command block
+#define STATUS_PORT      8450  // tools/app_server.py: how the client ended its last /keepalive
 
 // How a session ended (conn_t.end); a success case lists the ends it accepts
 enum {
     END_NONE = 0, END_NOTIFY = 1, END_FIN = 2, END_RX_ERR = 4, END_IDLE = 8, END_TIMEOUT = 16, END_FAILED = 32,
-    END_ERROR = 64,
+    END_ERROR = 64, END_US = 128,
 };
 static const char *end_name(int e)
 {
@@ -63,6 +65,7 @@ static const char *end_name(int e)
     case END_TIMEOUT: return "read-timeout";
     case END_FAILED:  return "tls-failed";
     case END_ERROR:   return "error";
+    case END_US:      return "closed-by-client";
     default:          return "none";
     }
 }
@@ -92,6 +95,9 @@ typedef struct {
     uint8_t time_source;      // what the OPEN carries
     uint8_t stub;
     bool http11;              // HTTP/1.1 (a server that refuses 1.0); the reply must then carry Content-Length
+    uint32_t post_len;        // POST this many bytes of the blob (in WRITE_CHUNK writes) instead of a GET
+    bool close_early;         // CLOSE while ESTABLISHED once the body is complete (END_US)
+    bool peer_notify;         // EXPECT_OK: the server must report the client's close_notify (STATUS_PORT)
     // Expectations
     uint8_t expect;
     int ends;                 // EXPECT_OK: the accepted ends (default close_notify); any other needs Content-Length
@@ -134,6 +140,7 @@ typedef struct {
     uint8_t ct_buf[CT_ROOM];  // the Ultimate's tls_ct_out
     uint8_t pt_buf[PT_ROOM];  // the Ultimate's tls_pt
     uint16_t ct_len, pt_len;
+    char peer[48];            // what the server saw at the end (peer_notify cases)
     command_buf_t buf;        // one RPC, request and reply
 } conn_t;
 
@@ -482,15 +489,43 @@ static bool conn_write(conn_t *k, const uint8_t *data, int len)
     return false;
 }
 
+// Block i (32 B) of the blob: SHA-256 of i as 4 bytes big-endian (tools/mkblob.py)
+static void blob_block(uint32_t i, uint8_t *out)
+{
+    uint8_t be[4] = { i >> 24, i >> 16, i >> 8, i };
+    size_t n;
+    psa_hash_compute(PSA_ALG_SHA_256, be, 4, out, 32, &n);
+}
+
 static bool conn_request(conn_t *k)
 {
+    const case_t *c = k->c;
     char req[256];
-    int n = snprintf(req, sizeof(req),
+    int n;
+    if (c->post_len) {
+        n = snprintf(req, sizeof(req),
+                     "POST %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: 1541u-tls-standalone/" APP_VERSION
+                     "\r\nContent-Length: %u\r\n\r\n", c->path, c->sni, (unsigned)c->post_len);
+    } else {
+        n = snprintf(req, sizeof(req),
                      "GET %s HTTP/1.%d\r\nHost: %s\r\nUser-Agent: 1541u-tls-standalone/" APP_VERSION
-                     "\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
-                     k->c->path, k->c->http11, k->c->sni ? k->c->sni : "localhost");
+                     "\r\nAccept-Encoding: identity\r\nConnection: %s\r\n\r\n",
+                     c->path, c->http11, c->sni ? c->sni : "localhost", c->close_early ? "keep-alive" : "close");
+    }
     if (!conn_write(k, (const uint8_t *)req, n)) {
         return false;
+    }
+    static uint8_t chunk[WRITE_CHUNK + 32];
+    for (uint32_t off = 0; off < c->post_len; ) {
+        int len = 0;
+        while ((len < WRITE_CHUNK) && (off + len < c->post_len)) {
+            blob_block((off + len) / 32, chunk + len);
+            len += 32;
+        }
+        if (!conn_write(k, chunk, len)) {
+            return false;
+        }
+        off += len;
     }
     k->t_req_sent = ms_now();
     k->read_deadline = k->t_req_sent + TOTAL_MS;
@@ -541,6 +576,11 @@ static bool conn_read_once(conn_t *k, int wait_ms)
     http_feed(&k->http, k->pt_buf, k->pt_len);
     if (k->state == TLS_STATE_CLOSED) {
         k->end = END_NOTIFY;
+        return true;
+    }
+    const http_t *h = &k->http;
+    if (k->c->close_early && h->in_body && (h->content_length >= 0) && (h->body_bytes >= (uint32_t)h->content_length)) {
+        k->end = END_US;
         return true;
     }
     if (k->state != TLS_STATE_ESTABLISHED) {
@@ -631,10 +671,8 @@ static bool judge(const conn_t *k, char *why, int len)
         return false;
     }
     if (!h->in_body || h->head_overflow || strncmp(h->status, "HTTP/1.", 7) || !strstr(h->status, " 200 ")) {
-        if (strncmp(h->status, "HTTP/1.0 200 ok", 15)) { // s_server -WWW's own status line
-            snprintf(why, len, "status \"%s\"", h->status);
-            return false;
-        }
+        snprintf(why, len, "status \"%s\"%s", h->status, h->head_overflow ? ", header overflow" : "");
+        return false;
     }
     if ((k->end != END_NOTIFY) && (h->content_length < 0)) {
         snprintf(why, len, "ended by %s without a Content-Length: completeness unknown", end_name(k->end));
@@ -652,9 +690,13 @@ static bool judge(const conn_t *k, char *why, int len)
         snprintf(why, len, "body SHA-256 differs");
         return false;
     }
-    snprintf(why, len, "%s, body %u B%s%s, %s", h->status, (unsigned)h->body_bytes,
+    if (c->peer_notify && strcmp(k->peer, "notify")) {
+        snprintf(why, len, "the server saw no close_notify: %s", k->peer);
+        return false;
+    }
+    snprintf(why, len, "%s, body %u B%s%s, %s%s", h->status, (unsigned)h->body_bytes,
              (h->content_length >= 0) ? " = Content-Length" : "", c->body_sha ? ", SHA-256 match" : "",
-             end_name(k->end));
+             end_name(k->end), c->peer_notify ? ", server saw close_notify" : "");
     return true;
 }
 
@@ -673,14 +715,14 @@ static void report(conn_t *k, uint32_t heap_before, const rpc_tls_stats_resp *en
         pass ? info_pass++ : info_fail++;
     }
     int64_t xfer_ms = (k->t_req_sent && k->t_end > k->t_req_sent) ? k->t_end - k->t_req_sent : 0;
-    printf("RESULT case=%s gate=%d host=%s port=%u sni=%s trust=%u opts=%u end=%s error=%s open_ret=%d "
+    printf("RESULT case=%s gate=%d peer=\"%s\" host=%s port=%u sni=%s trust=%u opts=%u end=%s error=%s open_ret=%d "
            "open_reason=%u state=%u esp_err=%d fail_reason=%u verify=0x%08x alert_in=%u alert_out=%u "
            "version=0x%04x suite=0x%04x group=0x%04x ems=%u time_source=%u http=\"%s\" content_length=%ld "
            "body_bytes=%u body_sha256=%02x%02x%02x%02x%02x%02x%02x%02x ct_in=%u ct_out=%u "
            "hs_wall_ms=%lld hs_mbedtls_ms=%u.%03u hs_engine_ms=%u.%03u xfer_ms=%lld xfer_engine_ms=%u.%03u "
            "steps=%u again_steps=%u step_max_ms=%u.%03u heap_before=%u heap_min=%u heap_peak_use=%d "
            "largest_free=%u largest_alloc=%u stack_free_hs=%u stack_free=%u stack_size=%u\n",
-           c->name, c->gate, c->host ? c->host : local_host, c->port, c->sni ? c->sni : "-", c->trust, c->opts,
+           c->name, c->gate, k->peer, c->host ? c->host : local_host, c->port, c->sni ? c->sni : "-", c->trust, c->opts,
            end_name(k->end), k->error ? k->error : "-", k->open_ret, k->open_reason, k->state, k->esp_err,
            k->fail_reason, (unsigned)k->verify_flags, k->alert_in, k->alert_out, k->hs.tls_version,
            k->hs.ciphersuite, k->hs.group, k->hs.ems, k->hs.time_source, h->status, h->content_length,
@@ -694,6 +736,49 @@ static void report(conn_t *k, uint32_t heap_before, const rpc_tls_stats_resp *en
            (int)(heap_before - end->heap_min), (unsigned)end->largest_block, (unsigned)alloc_max,
            (unsigned)k->hs.stack_free, (unsigned)stack_free, TLS_TASK_STACK);
     printf("CASE %s %s %s (%s)\n", c->name, c->gate ? "gate" : "info", pass ? "PASS" : "FAIL", why);
+}
+
+// tools/app_server.py's status port: "<connections ended> <how the last one ended>"
+static int peer_status(char *result, int len)
+{
+    char port[8], line[96];
+    snprintf(port, sizeof(port), "%u", STATUS_PORT);
+    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *res = NULL;
+    if ((getaddrinfo(local_host, port, &hints, &res) != 0) || !res) {
+        return -1;
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0), n = 0, got;
+    struct timeval tv = { 2, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
+        while ((n < (int)sizeof(line) - 1) && ((got = recv(fd, line + n, sizeof(line) - 1 - n, 0)) > 0)) {
+            n += got;
+        }
+    }
+    freeaddrinfo(res);
+    close(fd);
+    line[n] = 0;
+    int count = -1;
+    char text[64] = "";
+    if (sscanf(line, "%d %63[^\n]", &count, text) < 1) {
+        return -1;
+    }
+    snprintf(result, len, "%s", text);
+    return count;
+}
+
+// After a peer_notify case: waits up to 5 s for the server to record this connection's end
+static void await_peer(conn_t *k, int before)
+{
+    strcpy(k->peer, "no report from the server");
+    for (int i = 0; i < 50; i++) {
+        char text[48];
+        if (peer_status(text, sizeof(text)) > before) {
+            snprintf(k->peer, sizeof(k->peer), "%s", text);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
 }
 
 static void conn_init(conn_t *k, const case_t *c)
@@ -720,11 +805,16 @@ static void run_case(const case_t *c)
     stats(&k, TLS_SLOT_GLOBAL, 0, &base);
     set_ca(&k);
     engine_alloc_reset();
+    char text[48];
+    int before = c->peer_notify ? peer_status(text, sizeof(text)) : 0;
     if (conn_open(&k, 0) && conn_handshake(&k) && conn_request(&k)) {
         conn_read_all(&k);
     }
     k.t_end = ms_now();
     conn_close(&k);
+    if (c->peer_notify) {
+        await_peer(&k, before);
+    }
     stats(&k, TLS_SLOT_GLOBAL, 0, &end);
     uint32_t alloc_max = engine_alloc_max();
     uint32_t hwm = engine_task_stop();
@@ -795,7 +885,11 @@ static const case_t cases[] = {
       FAILS(TLS_FAIL_NO_EMS, 0, ANY) },
     { "c64wiki-require13", false, "www.c64-wiki.com", 443, "www.c64-wiki.com", "/", BUNDLE, TLS13, NULL, NIOS,
       FAILS(ANY, 0, 70) },
-    // The local OpenSSL servers (tools/servers.sh), private CA uploaded as CUSTOM: the gate
+    // Gate, but needs the network: a Mozilla-trusted chain under the wrong name (Wikipedia serves *.wikipedia.org
+    // to any SNI). BUNDLE has its own branch in tls_verify(), which no local server can reach.
+    { "bundle-wronghost", true, "en.wikipedia.org", 443, "nomatch.invalid", "/", BUNDLE, 0, NULL, NIOS,
+      FAILS(TLS_FAIL_CERT_VERIFY, 0x04, ANY) },
+    // The local servers (tools/servers.sh), private CA uploaded as CUSTOM: the gate
     { "local-tls13", true, NULL, 8443, "tls.test", "/blob.bin", CUSTOM, 0, NULL, NIOS,
       OK(.version = 0x0304, LOCAL_BLOB) },
     { "local-tls12", true, NULL, 8444, "tls.test", "/blob.bin", CUSTOM, 0, NULL, NIOS,
@@ -809,6 +903,10 @@ static const case_t cases[] = {
     { "local-require13-vs-tls12", true, NULL, 8444, "tls.test", "/", CUSTOM, TLS13, NULL, NIOS, FAILS(ANY, 0, 70) },
     { "local-pin", true, NULL, 8443, "tls.test", "/blob.bin", PIN, 0, pin_good, NIOS, OK(.version = 0x0304, LOCAL_BLOB) },
     { "local-pin-wrong", true, NULL, 8443, "tls.test", "/", PIN, 0, pin_wrong, NIOS, FAILS(TLS_FAIL_PIN_MISMATCH, 0, ANY) },
+    { "local-post-8k", true, NULL, 8449, "tls.test", "/echo", CUSTOM, 0, NULL, NIOS, .post_len = ECHO_LEN,
+      OK(.version = 0x0304, .body_len = ECHO_REPLY_LEN, .body_sha = echo_reply_sha256) },
+    { "local-close-established", true, NULL, 8449, "tls.test", "/keepalive", CUSTOM, 0, NULL, NIOS, .http11 = true,
+      .close_early = true, .peer_notify = true, OK(.version = 0x0304, .ends = END_US, .body_len = 5) },
     { "local-no-time", true, NULL, 8443, "tls.test", "/", CUSTOM, 0, NULL, TLS_TIME_NONE,
       .expect = EXPECT_REFUSED, .open_reason = TLS_OPEN_REASON_NO_TIME },
     { "local-no-entropy", true, NULL, 8443, "tls.test", "/", CUSTOM, 0, NULL, NIOS, STUB_NO_ENTROPY,

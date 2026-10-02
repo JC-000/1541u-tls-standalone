@@ -9,7 +9,7 @@ if [ -n "${ENGINE_URL_ENV:-}" ]; then URL=$ENGINE_URL_ENV; fi
 case "$URL" in "["*) echo "engine.env: ENGINE_URL is still a placeholder; set ENGINE_URL_ENV=<url or clone>" >&2; exit 1;; esac
 rm -rf engine
 git init -q engine
-git -C engine sparse-checkout set software/wifi software/io/uart tools/ca_store
+git -C engine sparse-checkout set software/wifi software/io/uart software/io/wifi software/io/network tools/ca_store
 git -C engine fetch -q --depth 1 "$URL" "$ENGINE_SHA"
 git -C engine -c advice.detachedHead=false checkout -q FETCH_HEAD
 test "$(git -C engine rev-parse HEAD)" = "$ENGINE_SHA"

@@ -3,6 +3,7 @@
 #   8443 TLS 1.3, CA-issued leaf for tls.test      8444 the same, TLS 1.2 only
 #   8445 TLS 1.3, leaf for other.test (wrong name)  8446 TLS 1.3, self-signed leaf for tls.test
 #   8447 TLS 1.3, expired leaf                      8448 TLS 1.2 without the extended master secret
+#   8449 TLS 1.3 (tools/app_server.py): /keepalive (records the client's close_notify, status on TCP 8450), /echo
 #   UDP 123 (NTP_PORT) SNTP from this machine's clock
 # -WWW serves blob.bin (tools/mkblob.py: 256 KiB, SHA-256 in certs/blob.h). PIDs go to <logdir>/pids.txt.
 set -u
@@ -33,6 +34,8 @@ srv 8446 selfsigned.pem selfsigned.key.pem -tls1_3
 srv 8447 expired.pem expired.key.pem -tls1_3
 python3 "$T/noems_server.py" 8448 "$C/good.pem" "$C/good.key.pem" > "$LOG/server-8448.log" 2>&1 &
 echo "$! noems_server.py 8448" >> "$LOG/pids.txt"
+python3 "$T/app_server.py" 8449 8450 "$C/good.pem" "$C/good.key.pem" > "$LOG/server-8449.log" 2>&1 &
+echo "$! app_server.py 8449 8450" >> "$LOG/pids.txt"
 python3 "$T/sntp_server.py" "${NTP_PORT:-123}" > "$LOG/server-ntp.log" 2>&1 &
 echo "$! sntp_server.py ${NTP_PORT:-123}" >> "$LOG/pids.txt"
 sleep 2

@@ -18,6 +18,12 @@ This app **addresses the isolation part of that condition** for our ESP32 TLS en
 - the outgoing requests are real;
 - the measurements are taken.
 
+Gideon's comment can also be read as asking for TLS on the Ultimate's own CPU, with no ESP32 at all. This app does
+not answer that reading, and we are asking him which one he meant. (He also wrote that he "would personally opt for
+the mbedtls library and not try to create anything ourselves"
+([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5890938239)); the engine uses stock
+mbedTLS.)
+
 What it does not do:
 - **It is an ESP32 app.** Our design puts TLS on the Ultimate's ESP32 co-processor, so the engine needs an ESP-IDF
   target. It is not "tested and benchmarked on all platforms" in the sense of a host or U2-family build.
@@ -50,9 +56,21 @@ starts from the bridge's sdkconfig.
   edited engine.
 - The configure log prints the sha256 of `tls_engine.c` and `tls_engine.h`.
 
-**The results in RESULTS.md are for the engine bytes at the `ENGINE_SHA` they name.** The PR's engine must be
-re-run before it is cited. Re-pointing means changing `ENGINE_SHA`: the sdkconfig is regenerated from that
-commit's own file by `tools/make_sdkconfig.py` at every run.
+**The results in RESULTS.md are for the engine bytes at the `ENGINE_SHA` they name.** Any other engine commit,
+including the one in the engine PR, must be run again before it is cited.
+
+To test another commit, set `ENGINE_SHA`, fetch and build. Two things follow that commit by themselves:
+- the sdkconfig, regenerated from that commit's own file by `tools/make_sdkconfig.py` at every run;
+- `tools/verify_transcriptions.py`, run at configure and at every build. It compares the app's hand copies of
+  firmware code with that commit's sources (comments and layout ignored):
+  - the bridge's `cmd_tls_*` handlers (`rpc_dispatch.c`), copied into `main/engine_task.c`;
+  - the Ultimate's `wifi_tls_take_step()` (`wifi_tls.cc`), copied into `take_step()` in `main/app.c`;
+  - the Ultimate's step pump (`network_target.cc`), ported into `main/app.c`.
+
+  The firmware regions must equal the references in `tools/transcriptions/*.ref` that the copies were made from,
+  and each copy must differ from its reference by exactly the declared delta in `tools/transcriptions/*.delta`.
+  Any other difference fails the build. A commit without those files (for example one that carries the engine but
+  not yet the Ultimate side) fails too. Updating the copies is a reviewed change (`--update`), never automatic.
 
 ### How the engine is driven
 In the firmware, the Ultimate owns the TCP connection and moves the ciphertext to the ESP32 in UART RPCs
@@ -78,14 +96,17 @@ firmware's shape:
   - WRITE (`:2070`): NO_READ steps;
   - READ (`:1921`): an eager top-up of up to 1,536 B per step; the end is close_notify, or TCP FIN followed by two
     quiet steps;
-  - CLOSE: the close_notify is sent.
+  - CLOSE: the close_notify is sent (the `local-close-established` case checks that the server receives it).
 
 The line numbers are at f2e46946.
 
 What it does not exercise:
 - the UART transport, the RPC framing and its timeouts;
-- the Ultimate's reset and cancel paths;
-- the stack frames of the bridge's dispatcher around the handlers.
+- the TLS queue's busy reply (`cmd_tls_busy()`);
+- the Ultimate's reset and cancel paths.
+
+On the TLS task the call chain is the bridge's own (`tls_task` → `tls_serve` → `cmd_tls_*` → engine). Only the UART
+send, which runs after the engine returns, is missing.
 
 ### Configuration
 `tools/make_sdkconfig.py` writes `sdkconfig` as the engine commit's own `software/wifi/raw_u64/sdkconfig` with
@@ -106,7 +127,11 @@ Two more differences come from regeneration, not from choice:
 Each case prints a `RESULT` line and a `CASE <name> gate|info PASS|FAIL (why)` line. The run ends with
 `SUMMARY` and **`VERDICT GREEN|RED`**.
 
-- **Gate cases** are the local OpenSSL servers (deterministic). VERDICT is GREEN only if every gate case passes.
+- **Gate cases** are the local servers (deterministic), plus one case that needs the network:
+  `bundle-wronghost`. The BUNDLE trust mode has its own branch in the engine's verify callback, and only a
+  Mozilla-trusted server can reach it, so that case connects to en.wikipedia.org with the wrong name
+  (`nomatch.invalid`) and requires the name check to fail. Without the network that one gate case fails, and so
+  does the VERDICT. VERDICT is GREEN only if every gate case passes.
 - **Info cases** are public hosts. They are informational, because a host can change its certificate, its TLS
   versions or its replies without the engine changing.
 - **A success case passes only if all of these hold:**
@@ -116,24 +141,38 @@ Each case prints a `RESULT` line and a `CASE <name> gate|info PASS|FAIL (why)` l
     also needs a matching Content-Length;
   - the body length equals `Content-Length` whenever the server sends one;
   - for the local 256 KiB download (`tools/mkblob.py`, deterministic), the body is **exactly 262,144 B with the
-    expected SHA-256** (`certs/blob.h`).
+    expected SHA-256** (`certs/blob.h`);
+  - public bodies are checked by length only, not by content.
 - **A failure case passes only on the expected failure:** the fail reason, the verify-flag bits, and the alert
   where one is named (alert 70 for REQUIRE_TLS13 against TLS 1.2).
 - **Ends are classified explicitly:** close-notify, tcp-fin-no-notify, rx-error, idle-timeout, read-timeout,
   tls-failed, error. Each RESULT line also counts the NO_MEM resend steps (`again_steps`).
 
 ### Red/green
-`tools/redgreen.sh <dir>` makes three runs:
-- the clean engine, which must be **GREEN**;
-- `mut1`, which must be **RED**: it drops all plaintext after 4 KiB;
-- `mut2`, which must be **RED**: it writes the step output before consuming the input, which corrupts it under
-  the bridge's overlay.
+`tools/redgreen.sh <dir>` runs the clean engine, which must be **GREEN**. It then runs every mutant in
+`tools/mutate.py`'s `REQUIRED_RED`, each of which must be **RED**:
+
+| Mutant | Known-bad change | Caught by |
+|---|---|---|
+| mut1 | drops all plaintext after 4 KiB | body length/SHA, the end |
+| mut2 | writes the step output before consuming the input | the bridge's overlaid buffer: handshakes fail |
+| m3b | drops the last record before close_notify | body length/SHA |
+| m4b | `tls_close()` sends no close_notify | `local-close-established`: the server reports no close_notify |
+| m5 | flips one bit at the 128 KiB mark | SHA-256 |
+| m6b | accepts a wrong host name under BUNDLE trust | `bundle-wronghost` |
+| m10 | a write keeps only its first 512 B | `local-post-8k`: the server's SHA-256 of the 8 KiB it received |
+
+`m8c` (the handshake does not run on a step whose input was refused) is defined, but **no case catches it**: no
+handshake step is ever refused here. See Limits.
 
 Each mutant is applied by `tools/mutate.py` to a **copy** of the engine. The engine check allows exactly that one
 changed file and labels the build and the console `MUTANT`.
 
 ## Build and run in QEMU (no hardware)
 Requires Docker and git.
+- The image is about 15.6 GB.
+- The repo must sit on a path Docker can bind-mount (Colima, for example, mounts only `$HOME` by default).
+- On Linux the container runs as root and writes `build/` and `sdkconfig` into the checkout as root.
 
 ```
 ENGINE_URL_ENV=<clone or url> tools/fetch_engine.sh     # ./engine at ENGINE_SHA
@@ -154,14 +193,33 @@ Only the repo (as `/work`) and the log directory (as `/out`) are mounted. Each r
 - runs `qemu-system-xtensa -M esp32` with user-mode networking (QEMU's host is 10.0.2.2) until `STANDALONE_DONE`;
 - writes `<logdir>/results.md`.
 
+Without internet the info cases and `bundle-wronghost` fail. The local cases still run, because SNTP is local.
+
+**Reproducible image.** `CONFIG_APP_REPRODUCIBLE_BUILD` is set, and `run_qemu.sh` sets `SOURCE_DATE_EPOCH` to the
+engine commit's time. So `__DATE__` (also in the engine's clock floor, `tls_build_time()`) is that commit's date,
+not the build day. RESULTS.md says whether two builds gave the same `tls_standalone.bin`.
+
 **QEMU timings are not hardware timings.** QEMU does not model the ESP32's clock, and the crypto accelerators are
 QEMU models. Treat every time as a comparison between cases only. Between our runs, the same case varied by up to
-4x with host load.
+4.4x with host load.
 
 **The QEMU heap has no Wi-Fi driver.** The firmware runs Wi-Fi and its buffers, so its free heap and its
 fragmentation differ. Of the heap figures, only the per-session use (peak minus baseline) carries over, and even
 that includes lwIP's open_eth buffers. The stack figure is the worst of the cases run, without silicon interrupt
 nesting.
+
+## Limits (what the gate does not catch)
+- **Refused handshake steps** (`ESP_ERR_NO_MEM` while handshaking) never happen here, so a bug there stays GREEN (`m8c`).
+- **Write-side NO_MEM resends.** Only the READ side's resends run (240 per 256 KiB download).
+- **Name and expiry checks.**
+  - Expiry is checked under CUSTOM trust only, the name under CUSTOM and BUNDLE.
+  - PIN has only its wrong-key case.
+- **`tls_set_ca` refusals**, a CA tag mismatch (`NO_CUSTOM_CA`), and the engine's own VERSION_REFUSED/DOWNGRADE
+  classification. In the REQUIRE_TLS13 cases the server aborts first, with alert 70.
+- **Public-host bodies** are checked by length, not content.
+- **Robustness:** HelloRetryRequest, P-384/P-521 key exchange, soak, repetition and fault injection (resets,
+  truncated records, slow peers).
+- **The firmware context:** the UART, the queue's busy path, and anything on hardware.
 
 ## Run on a classic ESP32 dev board (not done yet)
 The same image runs on a classic ESP32 (ESP32-D0WD, 4 MB flash; the U64's module is a classic ESP32) over Wi-Fi.
@@ -205,6 +263,10 @@ On a board the entropy gate is real: `entropy_source()` reports RADIO only after
   - c64-wiki with REQUIRE_TLS13 (alert 70).
 - **Gate (local OpenSSL servers, private CA uploaded as trust CUSTOM):**
   - TLS 1.3 and TLS 1.2 256 KiB downloads (SHA-256 checked);
+  - an 8 KiB POST, written in 892 B WRITEs, whose SHA-256 the server sends back (`tools/app_server.py`);
+  - CLOSE while ESTABLISHED: a kept-open connection is closed by the client after its body, and the server must
+    report that a close_notify arrived;
+  - BUNDLE trust with the wrong host name (en.wikipedia.org, network needed; see the oracle);
   - wrong host name, self-signed (CUSTOM and BUNDLE), expired;
   - TLS 1.2 without EMS, and REQUIRE_TLS13 against TLS 1.2;
   - PIN, right key (download checked) and wrong key;
