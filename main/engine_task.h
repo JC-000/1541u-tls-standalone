@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*
  * engine_task.h
  *
@@ -16,7 +17,7 @@
 #include "cmd_buffer.h"
 #include "tls_engine.h"
 
-#define TLS_TASK_STACK 8192 // rpc_dispatch.h:55 at f2e46946
+#define TLS_TASK_STACK 8192 // TLS_TASK_STACK in the bridge's rpc_dispatch.h
 
 // A new TLS task, so its stack high-water mark covers only what runs from now on
 void engine_task_start(void);

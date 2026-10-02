@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """sntp_server.py [port]: a minimal SNTP server (RFC 4330) answering with this machine's clock, so a QEMU run gets
 its time from the host instead of a public NTP server. Port 123 by default (needs root, as in the container)."""
 import socket, struct, sys, time

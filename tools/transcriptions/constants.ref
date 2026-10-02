@@ -1,0 +1,6 @@
+# The firmware constants the app copies (tools/verify_transcriptions.py --update).
+software/io/network/network_target.h NET_TLS_CT_MAX 1536
+software/io/network/network_target.h NET_TLS_PT_MAX 1024
+software/io/network/network_target.cc TLS_WRITE_BUDGET 4
+software/io/network/network_target.cc TLS_READ_BUDGET_STEPS 8
+software/wifi/raw_u64/main/rpc_dispatch.h TLS_TASK_STACK 8192

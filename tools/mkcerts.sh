@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # mkcerts.sh: the test PKI for the local OpenSSL servers (OpenSSL >= 3.4 for -not_before/-not_after).
 # Writes certs/: a private CA (embedded in the app as the CUSTOM CA), the leaves the servers use, and
 # pins.h with the SHA-256 of the good leaf's SubjectPublicKeyInfo (trust mode PIN).

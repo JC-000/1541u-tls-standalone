@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """mutate.py <mutant> <tls_engine.c>: applies one known-bad change to a COPY of the engine (tools/run_qemu.sh MUTANT=).
 Each entry is a list of (anchor, replacement); every anchor must occur exactly once. tools/redgreen.sh requires every
 mutant in REQUIRED_RED to turn the run RED. m8c is listed but not required: no case reaches a refused handshake step

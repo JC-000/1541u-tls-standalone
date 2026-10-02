@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # diff_sdkconfig.sh: every option that differs between this app's sdkconfig and the firmware bridge's (the engine checkout, engine.env ENGINE_SHA)
 cd "$(dirname "$0")/.."
 norm() { grep -E '^(CONFIG_|# CONFIG_.* is not set)' "$1" | sort; }

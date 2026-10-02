@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """make_sdkconfig.py: writes ./sdkconfig as the firmware bridge's own sdkconfig (engine/software/wifi/raw_u64/sdkconfig
 at ENGINE_SHA) with only the changes in DELTA. Run `idf.py reconfigure` after it; tools/diff_sdkconfig.sh then shows
 every line that differs from the firmware's, and that no CONFIG_MBEDTLS_ line differs except the bundle path."""

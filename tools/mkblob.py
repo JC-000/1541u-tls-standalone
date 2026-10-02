@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """mkblob.py [out | --header]: the local servers' 256 KiB download, deterministic: block i (32 B) is SHA-256 of i as
 4 bytes big-endian. With out, writes it; with --header, prints certs/blob.h: its length and SHA-256, and the reply
 tools/app_server.py's /echo must give for its first ECHO_LEN bytes. Otherwise prints the length and SHA-256."""

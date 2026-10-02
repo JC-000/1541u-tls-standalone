@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.16)
 
 # The engine is compiled from a git checkout of ENGINE_SHA (engine.env), in ./engine (tools/fetch_engine.sh) or in
@@ -17,6 +18,8 @@ if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "The engine check failed")
 endif()
 
+# The app version is fixed, not the repo's git describe, so the image depends only on the sources (reproducible build)
+set(PROJECT_VER "4")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(tls_standalone)
 

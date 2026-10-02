@@ -1,13 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # check_engine.cmake: cmake -DENGINE_DIR=... -DENGINE_SHA=... [-DENGINE_MUTANT=name] -P check_engine.cmake
-# The engine tree must be a git checkout of ENGINE_SHA with no file changed or added (an untracked header next to
-# tls_engine.c would shadow IDF's). A mutant build (tools/mutants.sh)
+# The engine tree must be a git checkout of ENGINE_SHA with no file changed or added, ignored files included (an
+# extra header next to tls_engine.c would shadow IDF's). A mutant build (tools/run_qemu.sh MUTANT=, tools/mutate.py)
 # may change tls_engine.c and nothing else. Runs at configure and again at every build, before main is compiled.
 execute_process(COMMAND git -C ${ENGINE_DIR} rev-parse HEAD OUTPUT_VARIABLE head OUTPUT_STRIP_TRAILING_WHITESPACE
                 RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0 OR NOT head STREQUAL ENGINE_SHA)
     message(FATAL_ERROR "engine: ${ENGINE_DIR} is at '${head}', not ENGINE_SHA ${ENGINE_SHA} (tools/fetch_engine.sh)")
 endif()
-execute_process(COMMAND git -C ${ENGINE_DIR} status --porcelain --untracked-files=all OUTPUT_VARIABLE dirty
+execute_process(COMMAND git -C ${ENGINE_DIR} status --porcelain --untracked-files=all --ignored OUTPUT_VARIABLE dirty
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 set(main ${ENGINE_DIR}/software/wifi/raw_u64/main)
 file(SHA256 ${main}/tls_engine.c c_sha)

@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*
  * engine_task.c
  *
  * The TLS task and the bridge's six TLS handlers. The handlers are the bridge's cmd_tls_open/step/close/stats/
- * close_all/set_ca (rpc_dispatch.c:375-521 at f2e46946) with my_uart_transmit_packet() left out, so the engine sees
- * the same buffers: in particular STEP's reply overlays its request (resp->data at +20, req->data at +12).
+ * close_all/set_ca and tls_serve (rpc_dispatch.c in the engine commit) with my_uart_transmit_packet() left out, so the
+ * engine sees the same buffers: in particular STEP's reply overlays its request (resp->data at +20, req->data at +12).
+ *
+ * Origin: those handlers are transcribed from software/wifi/raw_u64/main/rpc_dispatch.c of the 1541 Ultimate
+ * firmware (GideonZ/1541ultimate, GPL-3.0); tools/verify_transcriptions.py checks them against the engine commit.
  */
 
 #include <stddef.h>

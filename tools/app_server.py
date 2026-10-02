@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """app_server.py <port> <status_port> <cert> <key>: a TLS 1.3 server for the two cases s_server cannot serve.
   GET /keepalive  answers 5 bytes with Content-Length and keeps the connection open, then records how the client
                   ended it: "notify" (a close_notify arrived), "no-notify: ..." (TCP end without one) or "timeout".

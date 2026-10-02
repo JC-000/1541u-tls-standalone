@@ -1,11 +1,16 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*
  * app.c
  *
  * 1541u-tls-standalone: the 1541 Ultimate's ESP32 TLS engine (tls_engine.c, compiled unmodified) with no Ultimate
  * code linked. FreeRTOS, lwIP and mbedTLS from ESP-IDF; this file plays the Ultimate's part. It owns the TCP
  * socket, sends each request in the bridge's RPC layout (rpc_calls.h), checks each STEP reply as the Ultimate's
- * wifi_tls_take_step() does (wifi_tls.cc:176-241 at f2e46946), and pumps the session as network_target.cc does
- * (handshake :1336, READ :1921, WRITE :2070).
+ * wifi_tls_take_step() does, and pumps the session as network_target.cc's tls_handshake(), tls_read() and
+ * tls_write() do (all in the engine commit, engine.env).
+ *
+ * Origin: take_step() is transcribed from wifi_tls_take_step() in software/io/wifi/wifi_tls.cc, and the pump is
+ * ported from software/io/network/network_target.cc, of the 1541 Ultimate firmware (GideonZ/1541ultimate, GPL-3.0).
+ * tools/verify_transcriptions.py checks both against the engine commit.
  *
  * Every case prints one RESULT line and one CASE line, PASS or FAIL against its expectation. The local-server
  * cases are the gate (VERDICT); the public hosts are informational, as they change without the engine changing.
@@ -37,7 +42,7 @@
 #include "pins.h"
 #include "blob.h"
 
-#define APP_VERSION      "3"
+#define APP_VERSION      "4"
 #define CLIENT_STACK     16384
 #define CT_ROOM          1536  // network_target.h:70,152 (NET_TLS_CT_MAX, tls_ct_out)
 #define PT_ROOM          1024  // network_target.h:71,153 (NET_TLS_PT_MAX, tls_pt)
@@ -70,7 +75,7 @@ static const char *end_name(int e)
     }
 }
 
-// wifi_tls_take_step()'s results (wifi_tls.h at f2e46946)
+// wifi_tls_take_step()'s results (wifi_tls.h)
 enum { TAKE_OK = 0, TAKE_AGAIN = 1, TAKE_REFUSED = -1, TAKE_INVALID = -2, TAKE_FOREIGN = -3 };
 
 enum { STUB_NONE, STUB_NO_ENTROPY, STUB_SNTP_TIME };
@@ -108,6 +113,7 @@ typedef struct {
     int open_reason;          // EXPECT_REFUSED
     int fail_reason;          // EXPECT_FAIL: ANY or tls_fail_reason_t
     uint32_t flags;           // EXPECT_FAIL: verify_flags bits that must be set
+    bool flags_exact;         // EXPECT_FAIL: verify_flags must be exactly flags
     int alert_in;             // EXPECT_FAIL: ANY or the alert
 } case_t;
 
@@ -198,7 +204,7 @@ static bool wait_readable(int fd, int ms)
     return select(fd + 1, &r, NULL, NULL, &tv) > 0;
 }
 
-// wifi_tls_take_step() (wifi_tls.cc:176-241): the checks the Ultimate makes on every STEP reply
+// wifi_tls_take_step() (wifi_tls.cc): the checks the Ultimate makes on every STEP reply
 static int take_step(conn_t *k, uint8_t flags)
 {
     const uint8_t *reply = k->buf.data;
@@ -405,7 +411,7 @@ static bool conn_open(conn_t *k, uint8_t slot)
     return true;
 }
 
-// network_target.cc tls_handshake() (:1336-1446): the first step has no input and makes the ClientHello
+// network_target.cc tls_handshake(): the first step has no input and makes the ClientHello
 static bool conn_handshake(conn_t *k)
 {
     int64_t deadline = ms_now() + HANDSHAKE_MS;
@@ -461,7 +467,7 @@ static bool conn_handshake(conn_t *k)
     return true;
 }
 
-// tls_write() (:2070-2155): NO_READ steps until all of it is taken and nothing is left to send
+// network_target.cc tls_write(): NO_READ steps until all of it is taken and nothing is left to send
 static bool conn_write(conn_t *k, const uint8_t *data, int len)
 {
     int pending = len;
@@ -534,7 +540,7 @@ static bool conn_request(conn_t *k)
     return true;
 }
 
-// One round of tls_read() (:1921-2044): eager top-up, a step, the ciphertext out, the plaintext taken. Waits at
+// One round of network_target.cc tls_read(): eager top-up, a step, the ciphertext out, the plaintext taken. Waits at
 // most wait_ms when there is nothing to feed. Sets k->end and returns true when the stream has ended.
 static bool conn_read_once(conn_t *k, int wait_ms)
 {
@@ -645,8 +651,9 @@ static bool judge(const conn_t *k, char *why, int len)
             snprintf(why, len, "fail_reason %u, expected %d", k->fail_reason, c->fail_reason);
             return false;
         }
-        if ((k->verify_flags & c->flags) != c->flags) {
-            snprintf(why, len, "verify_flags 0x%08x lack 0x%08x", (unsigned)k->verify_flags, (unsigned)c->flags);
+        if (c->flags_exact ? (k->verify_flags != c->flags) : ((k->verify_flags & c->flags) != c->flags)) {
+            snprintf(why, len, "verify_flags 0x%08x, expected %s0x%08x", (unsigned)k->verify_flags,
+                     c->flags_exact ? "exactly " : "the bits ", (unsigned)c->flags);
             return false;
         }
         if ((c->alert_in != ANY) && (k->alert_in != c->alert_in)) {
@@ -701,6 +708,7 @@ static bool judge(const conn_t *k, char *why, int len)
 }
 
 static int gate_pass, gate_fail, gate_cases, info_pass, info_fail;
+static int gate_unreachable; // gate failures that never reached the server (bundle-wronghost without a network)
 
 static void report(conn_t *k, uint32_t heap_before, const rpc_tls_stats_resp *end, uint32_t stack_free,
                    uint32_t alloc_max)
@@ -711,6 +719,9 @@ static void report(conn_t *k, uint32_t heap_before, const rpc_tls_stats_resp *en
     bool pass = judge(k, why, sizeof(why));
     if (c->gate) {
         pass ? gate_pass++ : gate_fail++;
+        if (!pass && k->error && (!strcmp(k->error, "dns-failed") || !strcmp(k->error, "connect-failed"))) {
+            gate_unreachable++;
+        }
     } else {
         pass ? info_pass++ : info_fail++;
     }
@@ -888,7 +899,7 @@ static const case_t cases[] = {
     // Gate, but needs the network: a Mozilla-trusted chain under the wrong name (Wikipedia serves *.wikipedia.org
     // to any SNI). BUNDLE has its own branch in tls_verify(), which no local server can reach.
     { "bundle-wronghost", true, "en.wikipedia.org", 443, "nomatch.invalid", "/", BUNDLE, 0, NULL, NIOS,
-      FAILS(TLS_FAIL_CERT_VERIFY, 0x04, ANY) },
+      FAILS(TLS_FAIL_CERT_VERIFY, 0x04, ANY), .flags_exact = true },
     // The local servers (tools/servers.sh), private CA uploaded as CUSTOM: the gate
     { "local-tls13", true, NULL, 8443, "tls.test", "/blob.bin", CUSTOM, 0, NULL, NIOS,
       OK(.version = 0x0304, LOCAL_BLOB) },
@@ -935,7 +946,11 @@ static void client_task(void *arg)
     run_pair(&pair_a, &pair_b);
     printf("SUMMARY net=%s gate_pass=%d gate_fail=%d info_pass=%d info_fail=%d\n", path, gate_pass, gate_fail,
            info_pass, info_fail);
-    printf("VERDICT %s\n", ((gate_fail == 0) && (gate_pass == gate_cases)) ? "GREEN" : "RED");
+    // A gate that failed only because a server was unreachable says nothing about the engine
+    const char *verdict = ((gate_fail == 0) && (gate_pass == gate_cases)) ? "GREEN"
+                          : ((gate_fail == gate_unreachable) && (gate_pass + gate_fail == gate_cases)) ? "INCONCLUSIVE"
+                          : "RED";
+    printf("VERDICT %s%s\n", verdict, strcmp(verdict, "INCONCLUSIVE") ? "" : " (network: a gate server was unreachable)");
     printf("STANDALONE_DONE\n");
     vTaskDelete(NULL);
 }
@@ -945,7 +960,8 @@ void app_main(void)
 #ifdef ENGINE_MUTANT
     printf("*** MUTANT ENGINE: %s ***\n", ENGINE_MUTANT);
 #endif
-    printf("1541u-tls-standalone v" APP_VERSION ": ESP-IDF %s, mbedTLS %s, built " __DATE__ " " __TIME__ "\n",
+    printf("1541u-tls-standalone v" APP_VERSION ": ESP-IDF %s, mbedTLS %s, sources dated " __DATE__ " " __TIME__
+           " (SOURCE_DATE_EPOCH)\n",
            esp_get_idf_version(), MBEDTLS_VERSION_STRING);
     // As the bridge's main.c: the bundle's per-certificate INFO lines off
     esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);

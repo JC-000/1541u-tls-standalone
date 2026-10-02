@@ -1,25 +1,27 @@
 # 1541u-tls-standalone
 
+SPDX-License-Identifier: GPL-3.0-or-later (see [Licence](#licence))
+
 The 1541 Ultimate's ESP32 TLS engine, run on its own. The app is built from FreeRTOS, lwIP and mbedTLS (stock
 ESP-IDF 6.0.3) plus the engine, with no Ultimate code linked. It makes real outgoing HTTPS requests. It checks
 every byte that comes back. It measures handshake time, throughput, heap and stack.
 
 ## Why
-On GideonZ/1541ultimate#936, Gideon wrote
-([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5876427638)):
+GideonZ/1541ultimate#936 is another contributor's HTTPS pull request. On it, Gideon set this condition for TLS work
+in the Ultimate ([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5876427638)):
 
 > Let's not integrate this at all, until it is completely stable in a test project that doesn't have anything
 > ultimate related. Just FreeRTOS, lwIP and the TLS additions, combined with an outgoing request and possibly an
 > incoming server. This helps tremendously in isolating issues, do performance measurements and all. You won't
 > need any communication with the ESP32 either, and it can be tested and benchmarked on all platforms.
 
-This app **addresses the isolation part of that condition** for our ESP32 TLS engine:
+We apply that condition to our own engine. This app **addresses the isolation part of it** for our ESP32 TLS engine:
 - the engine runs with no Ultimate code linked and with no UART link to an Ultimate;
 - the outgoing requests are real;
 - the measurements are taken.
 
 Gideon's comment can also be read as asking for TLS on the Ultimate's own CPU, with no ESP32 at all. This app does
-not answer that reading, and we are asking him which one he meant. (He also wrote that he "would personally opt for
+not answer that reading. We intend to ask him which one he meant, in the project's issue tracker. (He also wrote that he "would personally opt for
 the mbedtls library and not try to create anything ourselves"
 ([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5890938239)); the engine uses stock
 mbedTLS.)
@@ -29,7 +31,8 @@ What it does not do:
   target. It is not "tested and benchmarked on all platforms" in the sense of a host or U2-family build.
 - **No incoming server.** The engine is a TLS client only.
 
-It is evidence for the ESP32 TLS engine PR. It is not meant to be merged.
+It is evidence for a planned pull request to GideonZ/1541ultimate that adds the ESP32 TLS engine. It is not meant to
+be merged itself.
 
 ## What is compiled
 | Part | Source |
@@ -39,7 +42,7 @@ It is evidence for the ESP32 TLS engine PR. It is not meant to be merged.
 | `software/wifi/raw_u64/sdkconfig` | the same commit: the bridge's configuration is the base of this app's (see Configuration) |
 | Mozilla root store `software/wifi/ca_store/cacert.pem` | the same commit, checked by its own `tools/ca_store/ca_store.py` |
 | mbedTLS 4.1.1, lwIP, FreeRTOS | stock ESP-IDF v6.0.3, no patches |
-| `main/engine_task.c` | the "TLS" task (8,192 B, core 1, `tskIDLE_PRIORITY + 1`) and the bridge's six `cmd_tls_*` handlers, transcribed from `rpc_dispatch.c:375-550` without the UART send |
+| `main/engine_task.c` | the "TLS" task (8,192 B, core 1, `tskIDLE_PRIORITY + 1`) and the bridge's six `cmd_tls_*` handlers and `tls_serve`, transcribed from `rpc_dispatch.c` without the UART send |
 | `main/app.c` | the Ultimate's part: the TCP socket, the RPC requests, the reply checks, and the step pump |
 | `main/stubs.c` | `entropy_source()` and `sntp_has_time()`, the two engine dependencies outside mbedTLS/IDF |
 | `main/net.c`, `main/http.c` | Wi-Fi station (dev board) or QEMU open_eth, then SNTP; the HTTP reply's length and SHA-256 |
@@ -49,11 +52,13 @@ starts from the bridge's sdkconfig.
 
 ### Which engine, and re-pointing it
 `engine.env` holds `ENGINE_URL` and `ENGINE_SHA`.
-- `tools/fetch_engine.sh` fetches that commit into `./engine`. `ENGINE_URL` is `[SOURCE BRANCH LINK]` until the
-  source is published; meanwhile `ENGINE_URL_ENV=<clone or url>` overrides it.
-- `tools/check_engine.cmake` refuses a checkout at another commit, or one with any tracked file changed. It runs
-  at configure and again at every build, before `main` is compiled, so an incremental build cannot slip in an
-  edited engine.
+- **`ENGINE_URL` is a placeholder, `[SOURCE BRANCH LINK]`.** It is filled in when the engine's branch is published;
+  until then this repository cannot be built by anyone else, and it is not to be published before that.
+  `ENGINE_URL_ENV=<clone or url>` overrides it.
+- `tools/fetch_engine.sh` fetches that commit into `./engine` (sparse, depth 1).
+- `tools/check_engine.cmake` refuses a checkout at another commit, or one with any file changed or added (ignored
+  files included). It runs at configure and again at every build, before `main` is compiled, so an incremental
+  build cannot slip in an edited engine.
 - The configure log prints the sha256 of `tls_engine.c` and `tls_engine.h`.
 
 **The results in RESULTS.md are for the engine bytes at the `ENGINE_SHA` they name.** Any other engine commit,
@@ -63,15 +68,19 @@ To test another commit, set `ENGINE_SHA`, fetch and build. Two things follow tha
 - the sdkconfig, regenerated from that commit's own file by `tools/make_sdkconfig.py` at every run;
 - `tools/verify_transcriptions.py`, run at configure and at every build. It compares the app's hand copies of
   firmware code with that commit's sources (comments and layout ignored):
-  - the bridge's `cmd_tls_*` handlers (`rpc_dispatch.c`), copied into `main/engine_task.c`;
-  - the Ultimate's `wifi_tls_take_step()` (`wifi_tls.cc`), copied into `take_step()` in `main/app.c`;
-  - the Ultimate's step pump (`network_target.cc`), ported into `main/app.c`.
+  - the bridge's `cmd_tls_*` handlers and `tls_serve` (`rpc_dispatch.c`), transcribed into `main/engine_task.c`:
+    the firmware region must equal its reference, and the copy must differ from it by exactly the declared delta
+    (`tools/transcriptions/rpc_dispatch.delta`);
+  - the Ultimate's `wifi_tls_take_step()` (`wifi_tls.cc`), transcribed into `take_step()` in `main/app.c`: the
+    same two checks;
+  - the Ultimate's step pump (`network_target.cc`), **ported**, not transcribed, into `main/app.c`. Only its
+    firmware source is pinned to its reference; the port itself is not compared, so a change there needs review;
+  - the constants the app copies (`NET_TLS_CT_MAX`, `NET_TLS_PT_MAX`, `TLS_WRITE_BUDGET`, `TLS_READ_BUDGET_STEPS`,
+    `TLS_TASK_STACK`): pinned, and each must equal the app's own value.
 
-  The firmware regions must equal the references in `tools/transcriptions/*.ref` that the copies were made from,
-  and each copy must differ from its reference by exactly the declared delta in `tools/transcriptions/*.delta`.
-  Any other difference fails the build. Updating the copies is a reviewed change (`--update`), never automatic.
-  `tools/drift_check.py` is this check's own red/green: five drift mutants (three in the firmware sources, two in
-  the copies) must fail it, and a comment-only firmware change must pass.
+  Any other difference fails the build. Updating the references is a reviewed change (`--update`), never
+  automatic. `tools/drift_check.py` is this check's own red/green: seven drift mutants (four in the firmware
+  sources, three in the copies) must fail it, and a comment-only firmware change must pass.
 
   **The transcription check requires the `ENGINE_SHA` commit to contain all three source files** (`rpc_dispatch.c`,
   `wifi_tls.cc` and `network_target.cc`). Without them it cannot show that the bridge handlers and the Ultimate's
@@ -86,9 +95,8 @@ firmware's shape:
 
 - **The request and reply buffer is the bridge's.** Every request is a `command_buf_t` laid out per
   `rpc_calls.h`. The handler writes its reply over it, exactly as `rpc_dispatch.c` does. In particular, STEP's
-  output (`resp->data`, offset 20) overlays its input (`req->data`, offset 12): see `rpc_dispatch.c:407-416`.
-- **Each STEP reply passes the Ultimate's checks.** These are ported from `wifi_tls_take_step()`
-  (`wifi_tls.cc:176-241`):
+  output (`resp->data`, offset 20) overlays its input (`req->data`, offset 12): see `cmd_tls_step()`.
+- **Each STEP reply passes the Ultimate's checks.** These are transcribed from `wifi_tls_take_step()`:
   - exact size;
   - a state is present;
   - `fail_reason` only with FAILED;
@@ -98,14 +106,14 @@ firmware's shape:
 
   A violation fails the case as `contract-violation`.
 - **The pump follows `network_target.cc`:**
-  - the handshake (`:1336`): the first step has no input; the input is resent on NO_MEM; all ciphertext goes out
-    before the next step; STATS after ESTABLISHED;
-  - WRITE (`:2070`): NO_READ steps;
-  - READ (`:1921`): an eager top-up of up to 1,536 B per step; the end is close_notify, or TCP FIN followed by two
-    quiet steps;
+  - the handshake (`tls_handshake()`): the first step has no input; the input is resent on NO_MEM; all ciphertext
+    goes out before the next step; STATS after ESTABLISHED;
+  - WRITE (`tls_write()`): NO_READ steps;
+  - READ (`tls_read()`): an eager top-up of up to 1,536 B per step; the end is close_notify, or TCP FIN followed by
+    two quiet steps;
   - CLOSE: the close_notify is sent (the `local-close-established` case checks that the server receives it).
 
-The line numbers are at f2e46946.
+Citations name functions in the engine commit, not line numbers, so they hold when `ENGINE_SHA` moves.
 
 What it does not exercise:
 - the UART transport, the RPC framing and its timeouts;
@@ -125,6 +133,7 @@ these changes. `tools/diff_sdkconfig.sh` prints the whole diff (it is in every r
 | `ETH_USE_OPENETH=y` | QEMU's NIC |
 | `HEAP_USE_HOOKS=y` | to measure the largest single allocation on the TLS task |
 | `MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH` | the same `cacert.pem`, reached from this project |
+| `APP_REPRODUCIBLE_BUILD=y`, `APP_COMPILE_TIME_DATE` off | a reproducible image (see below) |
 
 Two more differences come from regeneration, not from choice:
 - the bridge's `EXAMPLE_*` options disappear, because its `Kconfig.projbuild` is not part of this app;
@@ -132,13 +141,14 @@ Two more differences come from regeneration, not from choice:
 
 ## The test oracle
 Each case prints a `RESULT` line and a `CASE <name> gate|info PASS|FAIL (why)` line. The run ends with
-`SUMMARY` and **`VERDICT GREEN|RED`**.
+`SUMMARY` and **`VERDICT GREEN|RED|INCONCLUSIVE`**. INCONCLUSIVE means every gate failure was a server that could not
+be reached (no network for `bundle-wronghost`); it is never GREEN.
 
 - **Gate cases** are the local servers (deterministic), plus one case that needs the network:
   `bundle-wronghost`. The BUNDLE trust mode has its own branch in the engine's verify callback, and only a
   Mozilla-trusted server can reach it, so that case connects to en.wikipedia.org with the wrong name
-  (`nomatch.invalid`) and requires the name check to fail. Without the network that one gate case fails, and so
-  does the VERDICT. VERDICT is GREEN only if every gate case passes.
+  (`nomatch.invalid`) and requires exactly `verify_flags` 0x04 (name mismatch, chain trusted). Without the network
+  that case cannot run and the VERDICT is INCONCLUSIVE. VERDICT is GREEN only if every gate case passes.
 - **Info cases** are public hosts. They are informational, because a host can change its certificate, its TLS
   versions or its replies without the engine changing.
 - **A success case passes only if all of these hold:**
@@ -175,16 +185,25 @@ handshake step is ever refused here. See Limits.
 Each mutant is applied by `tools/mutate.py` to a **copy** of the engine. The engine check allows exactly that one
 changed file and labels the build and the console `MUTANT`.
 
+A run counts only if its own build succeeded (`BUILD_EXIT 0`) for this `engine.env`'s `ENGINE_SHA` and it printed a
+VERDICT; every run starts from an emptied log directory. A failed build, a mutant whose anchor no longer applies
+to the engine, or an unfinished run is reported WRONG, never an earlier result. `tools/selftest_redgreen.sh`
+tests exactly that with a fake `docker.sh`.
+
 ## Build and run in QEMU (no hardware)
-Requires Docker and git.
+Requires Docker, git and python3 on the host (`redgreen.sh` stops without python3).
 - The image is about 15.6 GB.
-- The repo must sit on a path Docker can bind-mount (Colima, for example, mounts only `$HOME` by default).
+- The repo and every log directory must sit on a path Docker can bind-mount (Colima, for example, mounts only
+  `$HOME` by default).
+- A run takes about 2-4 minutes; a full `redgreen.sh` (clean plus seven mutants) about 30 minutes.
 - On Linux the container runs as root and writes `build/` and `sdkconfig` into the checkout as root.
 
 ```
 ENGINE_URL_ENV=<clone or url> tools/fetch_engine.sh     # ./engine at ENGINE_SHA
-tools/docker.sh <logdir> [mut1|mut2]                  # one run
-tools/redgreen.sh <logdir>                            # clean GREEN + both mutants RED
+tools/docker.sh <logdir> [mutant]                     # one run
+tools/redgreen.sh <logdir>                            # clean GREEN + every required mutant RED
+python3 tools/drift_check.py                          # the transcription check's own reds (no Docker)
+tools/selftest_redgreen.sh                            # redgreen.sh's own reds (no Docker)
 ```
 
 `docker.sh` uses `espressif/idf` v6.0.3, pinned per architecture:
@@ -204,7 +223,9 @@ Without internet the info cases and `bundle-wronghost` fail. The local cases sti
 
 **Reproducible image.** `CONFIG_APP_REPRODUCIBLE_BUILD` is set, and `run_qemu.sh` sets `SOURCE_DATE_EPOCH` to the
 engine commit's time. So `__DATE__` (also in the engine's clock floor, `tls_build_time()`) is that commit's date,
-not the build day. RESULTS.md says whether two builds gave the same `tls_standalone.bin`.
+not the build day. The shipped firmware is not built this way. The app version is fixed (`PROJECT_VER`), so the
+image depends only on the app's sources, the engine commit, the image digest and the architecture, not on this
+repository's commit. RESULTS.md says whether two builds gave the same `tls_standalone.bin`.
 
 **QEMU timings are not hardware timings.** QEMU does not model the ESP32's clock, and the crypto accelerators are
 QEMU models. Treat every time as a comparison between cases only. Between our runs, the same case varied by up to
@@ -270,7 +291,7 @@ On a board the entropy gate is real: `entropy_source()` reports RADIO only after
   - c64-wiki with REQUIRE_TLS13 (alert 70).
 - **Gate (local OpenSSL servers, private CA uploaded as trust CUSTOM):**
   - TLS 1.3 and TLS 1.2 256 KiB downloads (SHA-256 checked);
-  - an 8 KiB POST, written in 896 B WRITEs (whole 32 B blocks up to `WRITE_CHUNK`), whose SHA-256 the server sends back (`tools/app_server.py`);
+  - an 8 KiB POST, written as nine 896 B WRITEs and one of 128 B (whole 32 B blocks, which takes each WRITE just past `WRITE_CHUNK` 892 B, a little more than one UCI command carries; the engine takes up to 1,536 B), whose SHA-256 the server sends back (`tools/app_server.py`);
   - CLOSE while ESTABLISHED: a kept-open connection is closed by the client after its body, and the server must
     report that a close_notify arrived;
   - BUNDLE trust with the wrong host name (en.wikipedia.org, network needed; see the oracle);
@@ -287,3 +308,20 @@ nothing. **Never install `certs/ca.pem` in a trust store.**
 
 ## Results
 See `RESULTS.md`, which records which run, which engine and which image produced them.
+
+## Licence
+This repository is licensed **GPL-3.0-or-later**; the full text is in `LICENSE`. Every source file carries an
+`SPDX-License-Identifier` line.
+
+Parts that come from elsewhere keep their own terms:
+- **From the 1541 Ultimate firmware** (GideonZ/1541ultimate, GPL-3.0):
+  - `main/engine_task.c`'s handlers (from `rpc_dispatch.c`);
+  - `take_step()` and the pump in `main/app.c` (from `wifi_tls.cc` and `network_target.cc`);
+  - `tools/transcriptions/*.ref`, which are verbatim firmware functions with comments and layout removed.
+
+  Each carries an origin note.
+- **The engine itself** (`tls_engine.c`/`.h` and the headers and Mozilla store beside it) is not in this
+  repository. It is fetched from the firmware at build time, under the firmware's licence.
+- **ESP-IDF and mbedTLS** (in the container image, linked into the image): Apache-2.0.
+- **The Mozilla root store** (`cacert.pem`, fetched with the engine): MPL-2.0.
+- **`certs/`** is generated test material (`tools/mkcerts.sh`).

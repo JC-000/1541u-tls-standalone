@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """noems_server.py <port> <cert> <key>: a TLS 1.2 server WITHOUT the extended master secret (RFC 7627), which the
 container's OpenSSL 3.0 s_server cannot be told to drop. SSL_OP_NO_EXTENDED_MASTER_SECRET is bit 0 in OpenSSL 3."""
 import socket, ssl, sys

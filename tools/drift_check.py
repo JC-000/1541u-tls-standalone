@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""drift_check.py: the required reds of tools/verify_transcriptions.py. Each drift mutant changes a COPY of the
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""drift_check.py [engine_dir]: the required reds of tools/verify_transcriptions.py. Each drift mutant changes a COPY of the
 engine checkout (the firmware drifted from what the app copied) or of the app (a copy drifted from its firmware
-source); verify_transcriptions.py must then fail. A comment-only firmware change must still pass. Exits 0 only if
+source), or a copied constant; verify_transcriptions.py must then fail. A comment-only firmware change must still pass. Exits 0 only if
 all of that holds."""
 import pathlib, shutil, subprocess, sys, tempfile
 
@@ -20,16 +21,20 @@ DRIFTS = [
      "&pt_out_len, &result);", "FAIL"),
     ("app-take-step-noread", "app", "main/app.c",
      "if ((flags & TLS_STEP_NO_READ) && (pt != 0)) {", "if (0) {", "FAIL"),
+    ("fw-ct-max", "engine", "software/io/network/network_target.h",
+     "#define NET_TLS_CT_MAX     1536", "#define NET_TLS_CT_MAX     4096", "FAIL"),
+    ("app-ct-room", "app", "main/app.c", "#define CT_ROOM          1536", "#define CT_ROOM          4096", "FAIL"),
     ("fw-comment-only (control)", "engine", "software/wifi/raw_u64/main/rpc_dispatch.c",
      "void cmd_tls_step(command_buf_t *buf)\n{", "void cmd_tls_step(command_buf_t *buf)\n{\n    // a reworded comment", "ok"),
 ]
 
+ENGINE = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "engine"
 failed = False
 for name, where, path, old, new, expect in DRIFTS:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = pathlib.Path(tmp)
         engine, app = tmp / "engine", tmp / "app"
-        shutil.copytree(ROOT / "engine", engine, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        shutil.copytree(ENGINE, engine, symlinks=True, ignore=shutil.ignore_patterns(".git"))
         app.mkdir()
         for part in ("main", "tools"):
             shutil.copytree(ROOT / part, app / part)

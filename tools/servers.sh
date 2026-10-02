@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # servers.sh start|stop <logdir>: the local test servers (OpenSSL >= 3.0 and python3). Ports:
 #   8443 TLS 1.3, CA-issued leaf for tls.test      8444 the same, TLS 1.2 only
 #   8445 TLS 1.3, leaf for other.test (wrong name)  8446 TLS 1.3, self-signed leaf for tls.test

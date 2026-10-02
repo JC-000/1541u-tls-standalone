@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """results.py <results.txt>: the RESULT/CASE lines of a run as a Markdown table."""
 import re, shlex, sys
 

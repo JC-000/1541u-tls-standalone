@@ -1,5 +1,6 @@
 #!/bin/bash
-# docker.sh <logdir> [mut1|mut2]: run_qemu.sh in espressif/idf:v6.0.3, the image for this machine's architecture
+# SPDX-License-Identifier: GPL-3.0-or-later
+# docker.sh <logdir> [mutant]: run_qemu.sh in espressif/idf:v6.0.3, the image for this machine's architecture
 # pinned by digest. Only the repo (as /work, with ./engine from tools/fetch_engine.sh) and <logdir> (as /out) are
 # mounted.
 set -u

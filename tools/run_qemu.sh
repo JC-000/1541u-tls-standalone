@@ -1,18 +1,22 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # run_qemu.sh <logdir>: inside espressif/idf:v6.0.3 (see docker.sh), in the repo root: write sdkconfig from the
 # engine's, build, start the local servers, run the image in QEMU (esp32, open_eth, user-mode networking) until
 # STANDALONE_DONE, stop everything. QEMU reaches this container as 10.0.2.2, so the servers listen here.
-# MUTANT=mut1|mut2 in the environment builds a mutated COPY of the engine instead (tools/mutate.py).
+# MUTANT=<name> in the environment builds a mutated COPY of the engine instead (tools/mutate.py). Every output of an
+# earlier run in <logdir> is removed first, so a failed build or run leaves no results.txt (and no VERDICT) behind.
 set -u
 cd "$(dirname "$0")/.."
 LOG=$1
 mkdir -p "$LOG"
+rm -rf "$LOG"/* 2>/dev/null
 git config --global --add safe.directory '*'
 . $IDF_PATH/export.sh > /dev/null 2>&1
 
 if [ -n "${MUTANT:-}" ]; then
     cp -a engine "/tmp/engine-$MUTANT"
-    python3 tools/mutate.py "$MUTANT" "/tmp/engine-$MUTANT/software/wifi/raw_u64/main/tls_engine.c" || exit 1
+    python3 tools/mutate.py "$MUTANT" "/tmp/engine-$MUTANT/software/wifi/raw_u64/main/tls_engine.c" \
+        > "$LOG/mutate.txt" 2>&1 || { cat "$LOG/mutate.txt"; echo "MUTANT_NOT_APPLIED"; exit 1; }
     git -C "/tmp/engine-$MUTANT" diff > "$LOG/mutant.diff"
     export ENGINE_DIR="/tmp/engine-$MUTANT" ENGINE_MUTANT="$MUTANT"
 fi

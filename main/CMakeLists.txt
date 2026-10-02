@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # tls_engine.c is compiled from the engine checkout (see ../CMakeLists.txt). The headers it includes come from
 # there too; stubs.c supplies the two functions it calls outside mbedTLS and IDF.
 if(DEFINED ENV{ENGINE_DIR})

@@ -1,3 +1,5 @@
+# Origin: software/io/wifi/wifi_tls.cc of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0; comments and layout removed.
+# Written by tools/verify_transcriptions.py --update; the reference the app's copy was made from.
 static bool is_answer(const uint8_t *reply, int size, uint8_t command, uint16_t sequence)
 {
 const rpc_header_t *hdr = (const rpc_header_t *)reply;
