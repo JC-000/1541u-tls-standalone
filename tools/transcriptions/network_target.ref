@@ -1,0 +1,386 @@
+# Origin: software/io/network/network_target.cc of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0-or-later; comments and layout
+# removed.
+# Written by tools/verify_transcriptions.py --update; the reference the app's copy was made from.
+int NetworkTarget :: tls_run_step(TlsSocket *e, void *step, uint32_t deadline, bool use_deadline)
+{
+tls_cancel_context_t context = { use_deadline, deadline };
+wifi_tls_cancel_t cancel = { tls_cancelled, &context };
+int result;
+for (int i = 0; ; i++) {
+result = wifi_tls_step(e->slot, e->tag, (wifi_tls_step_t *)step, TLS_STEP_RPC_MS, &cancel);
+if ((result != WIFI_TLS_UNSENT) || (i == TLS_UNSENT_RETRIES) || tls_cancelled(&context)) {
+break;
+}
+vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+}
+return result;
+}
+int NetworkTarget :: tls_send_all(int sock, const uint8_t *data, int length, uint32_t deadline)
+{
+uint32_t until = earlier(tick_after(TLS_SEND_MS), deadline);
+while (length > 0) {
+int sent = lwip_send(sock, data, length, MSG_DONTWAIT);
+if (sent > 0) {
+data += sent;
+length -= sent;
+continue;
+}
+if ((sent < 0) && (errno != EWOULDBLOCK) && (errno != EAGAIN)) {
+return errno;
+}
+if (reset_now()) {
+return -1;
+}
+if (reached(until)) {
+return ETIMEDOUT;
+}
+tls_wait(sock, true, until);
+}
+return 0;
+}
+Message *NetworkTarget :: tls_handshake(TlsSocket *e, uint32_t total)
+{
+uint32_t started = xTaskGetTickCount();
+uint32_t deadline = earlier(tick_after(TLS_HANDSHAKE_MS), total);
+char text[64];
+bool more = true;
+e->held_len = 0;
+while (true) {
+if (reset_now()) {
+return &c_status_tls_module;
+}
+if (reached(deadline)) {
+return &c_status_tls_hs_timeout;
+}
+if ((e->held_len == 0) && !more) {
+if (!tls_wait(e->socketnr, false, deadline)) {
+continue;
+}
+int n = lwip_recv(e->socketnr, e->held, NET_TLS_CT_MAX, MSG_DONTWAIT);
+if (n == 0) {
+return set_status("13,TLS HANDSHAKE FAILED: PEER CLOSED");
+}
+if (n < 0) {
+if ((errno == EWOULDBLOCK) || (errno == EAGAIN)) {
+continue;
+}
+put_dec(put_text(text, "13,TLS HANDSHAKE FAILED: PEER RESET: "), errno);
+return set_status(text);
+}
+e->held_len = n;
+}
+wifi_tls_step_t st;
+memset(&st, 0, sizeof(st));
+st.ct_in = e->held;
+st.ct_in_len = e->held_len;
+st.ct_out = tls_ct_out;
+st.ct_out_room = sizeof(tls_ct_out);
+st.pt_out = tls_pt;
+st.pt_out_room = sizeof(tls_pt);
+int result = tls_run_step(e, &st, deadline, true);
+if (reset_now()) {
+return &c_status_tls_module;
+}
+if ((result != 0) && (result != WIFI_TLS_AGAIN)) {
+if ((result == WIFI_TLS_REFUSED) && (st.esp_err == WIFI_TLS_ESP_NOT_FOUND)) {
+e->module_live = false;
+}
+if ((result == WIFI_TLS_BUSY) && reached(deadline)) {
+return &c_status_tls_hs_timeout;
+}
+return &c_status_tls_module;
+}
+if (result == 0) {
+e->held_len = 0;
+}
+if (st.state == WIFI_TLS_FAILED || st.state == WIFI_TLS_CLOSED) {
+e->module_live = false;
+}
+if (st.ct_out_len) {
+int error = tls_send_all(e->socketnr, tls_ct_out, st.ct_out_len, deadline);
+if ((error != 0) && (st.state != WIFI_TLS_FAILED)) {
+if (error < 0) {
+return &c_status_tls_module;
+}
+if ((error == ETIMEDOUT) && reached(deadline)) {
+return &c_status_tls_hs_timeout;
+}
+put_dec(put_text(text, "13,TLS HANDSHAKE FAILED: SEND ERROR: "), error);
+return set_status(text);
+}
+}
+if (st.state == WIFI_TLS_FAILED) {
+return tls_classify(e, &st);
+}
+if (st.state == WIFI_TLS_CLOSED) {
+return set_status("13,TLS HANDSHAKE FAILED: PEER CLOSED");
+}
+if (st.state == WIFI_TLS_ESTABLISHED) {
+if (st.pt_out_len) {
+memcpy(e->rx, tls_pt, st.pt_out_len);
+e->rx_len = st.pt_out_len;
+}
+e->module_more = true;
+break;
+}
+more = (st.ct_out_len != 0) || (result == WIFI_TLS_AGAIN);
+}
+tls_cancel_context_t context = { true, deadline };
+wifi_tls_cancel_t cancel = { tls_cancelled, &context };
+wifi_tls_stats_t stats;
+int esp_err;
+int result = wifi_tls_stats(e->slot, e->tag, &stats, &esp_err, TLS_STATS_RPC_MS, &cancel);
+if ((result != 0) || (stats.group == 0)) {
+if (!reset_now() && reached(deadline)) {
+return &c_status_tls_hs_timeout;
+}
+return &c_status_tls_module;
+}
+e->version = stats.tls_version;
+e->suite = stats.ciphersuite;
+e->group = stats.group;
+e->bits = stats.ems ? 0x01 : 0x00;
+memcpy(e->spki, stats.spki_sha256, sizeof(e->spki));
+e->handshake_ms = (xTaskGetTickCount() - started) * portTICK_PERIOD_MS;
+return NULL;
+}
+void NetworkTarget :: tls_read(TlsSocket *e, uint32_t length, Message **reply, Message **status)
+{
+*reply = &c_message_empty;
+if ((length == 0) || (length > NET_MAX_SOCKET_READ)) {
+*status = &c_status_param_out_of_range;
+return;
+}
+if (!e->failed && (e->rx_len == 0) && (e->end == TLS_END_NONE)) {
+uint32_t deadline = tick_after(TLS_READ_TOTAL_MS);
+uint32_t budget_end = tick_after(TLS_READ_BUDGET_MS);
+int steps = 0;
+while (!reset_now()) {
+if (!e->rx_err && !e->rx_fin && (e->held_len < NET_TLS_CT_MAX)) {
+int n = lwip_recv(e->socketnr, e->held + e->held_len, NET_TLS_CT_MAX - e->held_len, MSG_DONTWAIT);
+if (n > 0) {
+e->held_len += n;
+} else if (n == 0) {
+e->rx_fin = true;
+} else if ((errno != EWOULDBLOCK) && (errno != EAGAIN)) {
+e->rx_err = errno;
+}
+}
+bool draining = e->rx_err || e->rx_fin;
+if ((e->held_len == 0) && !e->module_more && !draining) {
+uint32_t until = earlier(earlier(tick_after(TLS_READ_WAIT_MS), budget_end), deadline);
+bool ready = false;
+while (!ready && !reached(until) && !reset_now()) {
+ready = tls_wait(e->socketnr, false, until);
+}
+if (!ready) {
+break;
+}
+continue;
+}
+if ((steps >= TLS_READ_BUDGET_STEPS) || reached(budget_end) || reached(deadline)) {
+break;
+}
+wifi_tls_step_t st;
+memset(&st, 0, sizeof(st));
+st.ct_in = e->held;
+st.ct_in_len = e->held_len;
+st.ct_out = tls_ct_out;
+st.ct_out_room = sizeof(tls_ct_out);
+st.pt_out = tls_pt;
+st.pt_out_room = sizeof(tls_pt);
+uint16_t fed = e->held_len;
+int result = tls_run_step(e, &st, deadline, true);
+steps++;
+if (reset_now()) {
+break;
+}
+if ((result != 0) && (result != WIFI_TLS_AGAIN)) {
+bool gone = (result == WIFI_TLS_REFUSED) && (st.esp_err == WIFI_TLS_ESP_NOT_FOUND);
+tls_fail_module(e, !gone);
+break;
+}
+if (result == 0) {
+e->held_len = 0;
+}
+if (st.ct_out_len) {
+int error = tls_send_all(e->socketnr, tls_ct_out, st.ct_out_len, deadline);
+if (error < 0) {
+break;
+}
+if (error && !e->rx_err && (st.state != WIFI_TLS_FAILED)) {
+char text[NET_TLS_STICKY_MAX];
+put_dec(put_text(text, "12,SEND ERROR: "), error);
+tls_fail(e, text);
+break;
+}
+}
+e->module_more = (st.ct_out_len != 0) || (st.pt_out_len != 0) || (result == WIFI_TLS_AGAIN);
+if (st.state == WIFI_TLS_FAILED) {
+e->module_live = false;
+if (e->write_saw_rx_err) {
+e->end = TLS_END_RX_ERR;
+} else {
+tls_fail_step(e, st.esp_err, st.alert_in);
+}
+break;
+}
+if (st.pt_out_len) {
+memcpy(e->rx, tls_pt, st.pt_out_len);
+e->rx_off = 0;
+e->rx_len = st.pt_out_len;
+}
+if (st.state == WIFI_TLS_CLOSED) {
+e->module_live = false;
+e->module_more = false;
+e->end = e->write_saw_rx_err ? TLS_END_RX_ERR : TLS_END_CLOSED;
+break;
+}
+if (st.state != WIFI_TLS_ESTABLISHED) {
+tls_fail_module(e, true);
+break;
+}
+if (e->rx_len) {
+e->quiet = 0;
+break;
+}
+if (draining && (fed == 0)) {
+if (++e->quiet >= 2) {
+e->end = e->rx_err ? TLS_END_RX_ERR : TLS_END_NO_NOTIFY;
+break;
+}
+} else {
+e->quiet = 0;
+}
+}
+}
+if (e->rx_len) {
+int n = (e->rx_len < length) ? e->rx_len : length;
+memcpy(buffer, e->rx + e->rx_off, n);
+e->rx_off += n;
+e->rx_len -= n;
+if (!e->rx_len) {
+e->rx_off = 0;
+}
+read_header(&data_message, n);
+start_read_reply(n, &c_status_ok, reply, status);
+return;
+}
+if (e->failed || (e->end != TLS_END_NONE)) {
+tls_end(e, reply, status);
+return;
+}
+read_header(&data_message, 0xFFFF);
+*reply = &data_message;
+char text[24];
+put_dec(put_text(text, "02,NO DATA: "), EWOULDBLOCK);
+*status = set_status(text);
+}
+void NetworkTarget :: tls_write(TlsSocket *e, const uint8_t *data, int length, Message **reply, Message **status)
+{
+char text[NET_TLS_STICKY_MAX];
+if (e->failed) {
+write_header(&data_message, reply, 0xFFFF);
+*status = set_status(e->sticky);
+return;
+}
+if (e->rx_err) {
+e->write_saw_rx_err = true;
+write_header(&data_message, reply, 0xFFFF);
+put_dec(put_text(text, "12,RECEIVE ERROR: "), e->rx_err);
+*status = set_status(text);
+return;
+}
+if (!e->module_live) {
+put_dec(put_text(text, "12,SEND ERROR: "), EPIPE);
+tls_fail(e, text);
+write_header(&data_message, reply, 0xFFFF);
+*status = set_status(e->sticky);
+return;
+}
+if (length == 0) {
+write_header(&data_message, reply, 0);
+*status = &c_status_ok;
+return;
+}
+uint32_t deadline = tick_after(TLS_WRITE_TOTAL_MS);
+int pending = length;
+int steps = 0;
+while (true) {
+if (reset_now()) {
+tls_fail(e, "17,TLS MODULE NOT RESPONDING");
+break;
+}
+if (steps >= TLS_WRITE_BUDGET) {
+tls_fail_module(e, true);
+break;
+}
+wifi_tls_step_t st;
+memset(&st, 0, sizeof(st));
+st.flags = WIFI_TLS_STEP_NO_READ;
+st.pt_in = data;
+st.pt_in_len = pending;
+st.ct_out = tls_ct_out;
+st.ct_out_room = sizeof(tls_ct_out);
+st.pt_out = tls_pt;
+st.pt_out_room = sizeof(tls_pt);
+int result = tls_run_step(e, &st, deadline, true);
+steps++;
+if (reset_now()) {
+tls_fail(e, "17,TLS MODULE NOT RESPONDING");
+break;
+}
+if ((result != 0) && (result != WIFI_TLS_AGAIN)) {
+bool gone = (result == WIFI_TLS_REFUSED) && (st.esp_err == WIFI_TLS_ESP_NOT_FOUND);
+tls_fail_module(e, !gone);
+break;
+}
+if (result == 0) {
+pending = 0;
+}
+if (st.ct_out_len) {
+int error = tls_send_all(e->socketnr, tls_ct_out, st.ct_out_len, deadline);
+if (error) {
+if (error < 0) {
+tls_fail(e, "17,TLS MODULE NOT RESPONDING");
+} else {
+put_dec(put_text(text, "12,SEND ERROR: "), error);
+tls_fail(e, text);
+}
+break;
+}
+}
+if (st.state == WIFI_TLS_FAILED) {
+tls_fail_step(e, st.esp_err, st.alert_in);
+break;
+}
+if (st.state != WIFI_TLS_ESTABLISHED) {
+tls_fail_module(e, st.state != WIFI_TLS_CLOSED);
+break;
+}
+if ((pending == 0) && (st.ct_out_len == 0)) {
+write_header(&data_message, reply, (uint16_t)length);
+*status = &c_status_ok;
+return;
+}
+}
+write_header(&data_message, reply, 0xFFFF);
+*status = set_status(e->sticky);
+}
+void NetworkTarget :: tls_close_entry(TlsSocket *e, bool send_notify)
+{
+if (e->module_live && !reset_now()) {
+tls_cancel_context_t context = { false, 0 };
+wifi_tls_cancel_t cancel = { tls_cancelled, &context };
+uint16_t notify_len = 0;
+int esp_err;
+int result = wifi_tls_close(e->slot, e->tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
+TLS_CLOSE_RPC_MS, &cancel);
+if ((result == 0) && send_notify && notify_len) {
+tls_send_all(e->socketnr, tls_ct_out, notify_len, tick_after(TLS_NOTIFY_SEND_MS));
+}
+}
+untrack_socket(e->socketnr);
+lwip_close(e->socketnr);
+e->used = false;
+}

@@ -1,0 +1,45 @@
+--- software/wifi/raw_u64/main/rpc_dispatch.c
++++ main/engine_task.c
+@@ -1 +1 @@
+-void cmd_tls_open(command_buf_t *buf)
++static void cmd_tls_open(command_buf_t *buf)
+@@ -23 +22,0 @@
+-my_uart_transmit_packet(UART_CHAN, buf);
+@@ -25 +24 @@
+-void cmd_tls_step(command_buf_t *buf)
++static void cmd_tls_step(command_buf_t *buf)
+@@ -55 +53,0 @@
+-my_uart_transmit_packet(UART_CHAN, buf);
+@@ -57 +55 @@
+-void cmd_tls_close(command_buf_t *buf)
++static void cmd_tls_close(command_buf_t *buf)
+@@ -70 +67,0 @@
+-my_uart_transmit_packet(UART_CHAN, buf);
+@@ -72 +69 @@
+-void cmd_tls_stats(command_buf_t *buf)
++static void cmd_tls_stats(command_buf_t *buf)
+@@ -103 +100 @@
+-resp->block_max_ms = block_max_ms;
++resp->block_max_ms = 0;
+@@ -106 +102,0 @@
+-my_uart_transmit_packet(UART_CHAN, buf);
+@@ -108 +104 @@
+-void cmd_tls_close_all(command_buf_t *buf)
++static void cmd_tls_close_all(command_buf_t *buf)
+@@ -114 +109,0 @@
+-my_uart_transmit_packet(UART_CHAN, buf);
+@@ -116 +111 @@
+-void cmd_tls_set_ca(command_buf_t *buf)
++static void cmd_tls_set_ca(command_buf_t *buf)
+@@ -131 +125,0 @@
+-my_uart_transmit_packet(UART_CHAN, buf);
+@@ -133 +127 @@
+-void tls_serve(command_buf_t *buf)
++static void serve(command_buf_t *buf)
+@@ -135,2 +129 @@
+-rpc_header_t *hdr = (rpc_header_t *)buf->data;
+-switch (hdr->command) {
++switch (((rpc_header_t *)buf->data)->command) {
+@@ -156 +149 @@
+-cmd_not_implemented(buf);
++buf->size = 0;

@@ -1,0 +1,90 @@
+--- software/io/wifi/wifi_tls.cc
++++ main/app.c
+@@ -1 +1 @@
+-static bool is_answer(const uint8_t *reply, int size, uint8_t command, uint16_t sequence)
++static int take_step(conn_t *k, uint8_t flags)
+@@ -3,14 +3,2 @@
+-const rpc_header_t *hdr = (const rpc_header_t *)reply;
+-return (size >= (int)sizeof(rpc_header_t)) && (hdr->command == command) && (hdr->sequence == sequence);
+-}
+-static bool bare_refusal(const uint8_t *reply, int size, int *esp_err)
+-{
+-const rpc_espcmd_resp *result = (const rpc_espcmd_resp *)reply;
+-if ((size == (int)sizeof(rpc_espcmd_resp)) && (result->esp_err != 0)) {
+-*esp_err = result->esp_err;
+-return true;
+-}
+-return false;
+-}
+-int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_tls_step_t *step)
+-{
++const uint8_t *reply = k->buf.data;
++int size = k->buf.size;
+@@ -19,2 +7,2 @@
+-if (!is_answer(reply, size, CMD_TLS_STEP, sequence)) {
+-return WIFI_TLS_FOREIGN;
++if ((size < (int)sizeof(rpc_header_t)) || (result->hdr.command != CMD_TLS_STEP) || (result->hdr.sequence != k->seq)) {
++return TAKE_FOREIGN;
+@@ -22,2 +10,3 @@
+-if (bare_refusal(reply, size, &step->esp_err)) {
+-return WIFI_TLS_REFUSED;
++if ((size == (int)sizeof(rpc_espcmd_resp)) && (result->esp_err != 0)) {
++k->esp_err = result->esp_err;
++return TAKE_REFUSED;
+@@ -26 +15 @@
+-return WIFI_TLS_INVALID;
++return TAKE_INVALID;
+@@ -30 +19 @@
+-bool no_mem = has_state && (result->esp_err == WIFI_TLS_ESP_NO_MEM);
++bool no_mem = has_state && (result->esp_err == ESP_ERR_NO_MEM);
+@@ -34 +23 @@
+-step->esp_err = result->esp_err;
++k->esp_err = result->esp_err;
+@@ -36 +25 @@
+-step->state = result->state;
++k->state = result->state;
+@@ -38 +27 @@
+-return WIFI_TLS_REFUSED;
++return TAKE_REFUSED;
+@@ -41 +30 @@
+-return WIFI_TLS_INVALID;
++return TAKE_INVALID;
+@@ -44 +33 @@
+-return WIFI_TLS_INVALID;
++return TAKE_INVALID;
+@@ -48,2 +37,2 @@
+-if ((ct > step->ct_out_room) || (pt > step->pt_out_room)) {
+-return WIFI_TLS_INVALID;
++if ((ct > CT_ROOM) || (pt > PT_ROOM)) {
++return TAKE_INVALID;
+@@ -51,2 +40,2 @@
+-if ((step->flags & WIFI_TLS_STEP_NO_READ) && (pt != 0)) {
+-return WIFI_TLS_INVALID;
++if ((flags & TLS_STEP_NO_READ) && (pt != 0)) {
++return TAKE_INVALID;
+@@ -57 +46 @@
+-return WIFI_TLS_INVALID;
++return TAKE_INVALID;
+@@ -59,11 +48,11 @@
+-memcpy(step->ct_out, result->data, ct);
+-memcpy(step->pt_out, result->data + ct, pt);
+-step->ct_out_len = ct;
+-step->pt_out_len = pt;
+-step->state = result->state;
+-step->esp_err = result->esp_err;
+-step->alert_in = result->alert_in;
+-step->alert_out = result->alert_out;
+-step->fail_reason = result->fail_reason;
+-step->verify_flags = result->verify_flags;
+-return again ? WIFI_TLS_AGAIN : 0;
++memcpy(k->ct_buf, result->data, ct);
++memcpy(k->pt_buf, result->data + result->ct_out_len, pt);
++k->ct_len = ct;
++k->pt_len = pt;
++k->state = result->state;
++k->esp_err = result->esp_err;
++k->alert_in = result->alert_in;
++k->alert_out = result->alert_out;
++k->fail_reason = result->fail_reason;
++k->verify_flags = result->verify_flags;
++return again ? TAKE_AGAIN : TAKE_OK;

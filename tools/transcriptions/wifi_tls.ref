@@ -1,0 +1,73 @@
+# Origin: software/io/wifi/wifi_tls.cc of the 1541 Ultimate firmware (GideonZ/1541ultimate), GPL-3.0-or-later; comments and layout
+# removed.
+# Written by tools/verify_transcriptions.py --update; the reference the app's copy was made from.
+static bool is_answer(const uint8_t *reply, int size, uint8_t command, uint16_t sequence)
+{
+const rpc_header_t *hdr = (const rpc_header_t *)reply;
+return (size >= (int)sizeof(rpc_header_t)) && (hdr->command == command) && (hdr->sequence == sequence);
+}
+static bool bare_refusal(const uint8_t *reply, int size, int *esp_err)
+{
+const rpc_espcmd_resp *result = (const rpc_espcmd_resp *)reply;
+if ((size == (int)sizeof(rpc_espcmd_resp)) && (result->esp_err != 0)) {
+*esp_err = result->esp_err;
+return true;
+}
+return false;
+}
+int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_tls_step_t *step)
+{
+const rpc_tls_step_resp *result = (const rpc_tls_step_resp *)reply;
+const int header = offsetof(rpc_tls_step_resp, data);
+if (!is_answer(reply, size, CMD_TLS_STEP, sequence)) {
+return WIFI_TLS_FOREIGN;
+}
+if (bare_refusal(reply, size, &step->esp_err)) {
+return WIFI_TLS_REFUSED;
+}
+if ((size < header) || (size != header + result->ct_out_len + result->pt_out_len)) {
+return WIFI_TLS_INVALID;
+}
+bool has_state = result->state <= TLS_STATE_FAILED;
+bool failed = has_state && (result->state == TLS_STATE_FAILED);
+bool no_mem = has_state && (result->esp_err == WIFI_TLS_ESP_NO_MEM);
+bool again = no_mem && ((result->state == TLS_STATE_HANDSHAKING) || (result->state == TLS_STATE_ESTABLISHED));
+bool closed = no_mem && (result->state == TLS_STATE_CLOSED);
+if ((result->esp_err != 0) && !failed && !again && !closed) {
+step->esp_err = result->esp_err;
+if (has_state) {
+step->state = result->state;
+}
+return WIFI_TLS_REFUSED;
+}
+if (!has_state) {
+return WIFI_TLS_INVALID;
+}
+if (!failed && (result->fail_reason != TLS_FAIL_NONE)) {
+return WIFI_TLS_INVALID;
+}
+uint16_t ct = result->ct_out_len;
+uint16_t pt = result->pt_out_len;
+if ((ct > step->ct_out_room) || (pt > step->pt_out_room)) {
+return WIFI_TLS_INVALID;
+}
+if ((step->flags & WIFI_TLS_STEP_NO_READ) && (pt != 0)) {
+return WIFI_TLS_INVALID;
+}
+if (failed) {
+pt = 0;
+} else if ((pt != 0) && (result->state != TLS_STATE_ESTABLISHED) && (result->state != TLS_STATE_CLOSED)) {
+return WIFI_TLS_INVALID;
+}
+memcpy(step->ct_out, result->data, ct);
+memcpy(step->pt_out, result->data + ct, pt);
+step->ct_out_len = ct;
+step->pt_out_len = pt;
+step->state = result->state;
+step->esp_err = result->esp_err;
+step->alert_in = result->alert_in;
+step->alert_out = result->alert_out;
+step->fail_reason = result->fail_reason;
+step->verify_flags = result->verify_flags;
+return again ? WIFI_TLS_AGAIN : 0;
+}
