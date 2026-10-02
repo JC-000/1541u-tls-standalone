@@ -263,7 +263,7 @@ On a board the entropy gate is real: `entropy_source()` reports RADIO only after
   - c64-wiki with REQUIRE_TLS13 (alert 70).
 - **Gate (local OpenSSL servers, private CA uploaded as trust CUSTOM):**
   - TLS 1.3 and TLS 1.2 256 KiB downloads (SHA-256 checked);
-  - an 8 KiB POST, written in 892 B WRITEs, whose SHA-256 the server sends back (`tools/app_server.py`);
+  - an 8 KiB POST, written in 896 B WRITEs (whole 32 B blocks up to `WRITE_CHUNK`), whose SHA-256 the server sends back (`tools/app_server.py`);
   - CLOSE while ESTABLISHED: a kept-open connection is closed by the client after its body, and the server must
     report that a close_notify arrived;
   - BUNDLE trust with the wrong host name (en.wikipedia.org, network needed; see the oracle);
