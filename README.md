@@ -1,87 +1,180 @@
 # 1541u-tls-standalone
 
-The 1541 Ultimate's ESP32 TLS engine on its own: FreeRTOS, lwIP and mbedTLS from ESP-IDF 6.0.3, the engine,
-and nothing of the Ultimate. It makes real outgoing HTTPS requests and measures handshake time, throughput,
-heap and stack.
+The 1541 Ultimate's ESP32 TLS engine, run on its own. The app is built from FreeRTOS, lwIP and mbedTLS (stock
+ESP-IDF 6.0.3) plus the engine, with no Ultimate code linked. It makes real outgoing HTTPS requests. It checks
+every byte that comes back. It measures handshake time, throughput, heap and stack.
 
-It answers Gideon's condition on GideonZ/1541ultimate#936
-([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5876427638)): "completely stable in a
-test project that doesn't have anything ultimate related. Just FreeRTOS, lwIP and the TLS additions, combined
-with an outgoing request". It is evidence for the ESP32 TLS engine PR. It is not meant to be merged.
+## Why
+On GideonZ/1541ultimate#936, Gideon wrote
+([comment](https://github.com/GideonZ/1541ultimate/pull/936#issuecomment-5876427638)):
+
+> Let's not integrate this at all, until it is completely stable in a test project that doesn't have anything
+> ultimate related. Just FreeRTOS, lwIP and the TLS additions, combined with an outgoing request and possibly an
+> incoming server. This helps tremendously in isolating issues, do performance measurements and all. You won't
+> need any communication with the ESP32 either, and it can be tested and benchmarked on all platforms.
+
+This app **addresses the isolation part of that condition** for our ESP32 TLS engine:
+- the engine runs with no Ultimate code linked and with no UART link to an Ultimate;
+- the outgoing requests are real;
+- the measurements are taken.
+
+What it does not do:
+- **It is an ESP32 app.** Our design puts TLS on the Ultimate's ESP32 co-processor, so the engine needs an ESP-IDF
+  target. It is not "tested and benchmarked on all platforms" in the sense of a host or U2-family build.
+- **No incoming server.** The engine is a TLS client only.
+
+It is evidence for the ESP32 TLS engine PR. It is not meant to be merged.
 
 ## What is compiled
-
 | Part | Source |
 |---|---|
-| `tls_engine.c`, `tls_engine.h` | **unmodified**, from GideonZ/1541ultimate fork commit `f2e46946` (branch esp-tls/m3), through the symlink `engine` |
-| headers the engine includes (`rpc_calls.h`, `wifi_modem.h`, `sntp.h`, `cmd_buffer.h`) | the same commit. Declarations only; none of their `.c` files is linked |
-| Mozilla root store (`software/wifi/ca_store/cacert.pem`) | the same commit, checked by its own `tools/ca_store/ca_store.py` |
-| mbedTLS 4.1.1, lwIP, FreeRTOS | stock ESP-IDF v6.0.3 (`espressif/idf:v6.0.3@sha256:54278f2c…`), no patches |
+| `tls_engine.c`, `tls_engine.h` | **unmodified**, from the firmware commit `ENGINE_SHA` in `engine.env`, fetched into `./engine` |
+| `rpc_calls.h`, `wifi_modem.h`, `sntp.h`, `cmd_buffer.h` | the same commit. These are bridge headers that the engine's own `#include`s name. They are declarations only; none of their `.c` files is linked |
+| `software/wifi/raw_u64/sdkconfig` | the same commit: the bridge's configuration is the base of this app's (see Configuration) |
+| Mozilla root store `software/wifi/ca_store/cacert.pem` | the same commit, checked by its own `tools/ca_store/ca_store.py` |
+| mbedTLS 4.1.1, lwIP, FreeRTOS | stock ESP-IDF v6.0.3, no patches |
+| `main/engine_task.c` | the "TLS" task (8,192 B, core 1, `tskIDLE_PRIORITY + 1`) and the bridge's six `cmd_tls_*` handlers, transcribed from `rpc_dispatch.c:375-550` without the UART send |
+| `main/app.c` | the Ultimate's part: the TCP socket, the RPC requests, the reply checks, and the step pump |
 | `main/stubs.c` | `entropy_source()` and `sntp_has_time()`, the two engine dependencies outside mbedTLS/IDF |
-| `main/engine_task.c` | the "TLS" task: 8,192 B stack, core 1, `tskIDLE_PRIORITY + 1`, as the bridge's `rpc_dispatch.c` |
-| `main/app.c` | the Ultimate's part: DNS, the TCP socket, and the step pump of `network_target.cc` |
-| `main/net.c` | Wi-Fi station (dev board) or QEMU's open_eth, then SNTP |
+| `main/net.c`, `main/http.c` | Wi-Fi station (dev board) or QEMU open_eth, then SNTP; the HTTP reply's length and SHA-256 |
 
-The configure step fails unless every file taken from `engine/` has the SHA-256 pinned in `CMakeLists.txt`:
+So, plainly: **no Ultimate code is linked**, but the engine still includes four bridge headers, and the app
+starts from the bridge's sdkconfig.
 
-```
-tls_engine.c  5ee04a59562245dd79bf5e7f7ee5cf4e30abb76bbfc4dc2d5e9b56d680da5361
-tls_engine.h  efabf8a2450c5f4eb7ca7a2549ef71a75e58aa191a6c41b536ea648ef333b109
-```
+### Which engine, and re-pointing it
+`engine.env` holds `ENGINE_URL` and `ENGINE_SHA`.
+- `tools/fetch_engine.sh` fetches that commit into `./engine`. `ENGINE_URL` is `[SOURCE BRANCH LINK]` until the
+  source is published; meanwhile `ENGINE_URL_ENV=<clone or url>` overrides it.
+- `tools/check_engine.cmake` refuses a checkout at another commit, or one with any tracked file changed. It runs
+  at configure and again at every build, before `main` is compiled, so an incremental build cannot slip in an
+  edited engine.
+- The configure log prints the sha256 of `tls_engine.c` and `tls_engine.h`.
+
+**The results in RESULTS.md are for the engine bytes at the `ENGINE_SHA` they name.** The PR's engine must be
+re-run before it is cited. Re-pointing means changing `ENGINE_SHA`: the sdkconfig is regenerated from that
+commit's own file by `tools/make_sdkconfig.py` at every run.
 
 ### How the engine is driven
-The engine never touches a socket. In the firmware, the Ultimate owns the TCP connection and moves the
-ciphertext over UART RPCs (`CMD_TLS_OPEN/STEP/CLOSE/STATS/SET_CA`) to the ESP32. Here `app.c` owns an lwIP
-socket and calls the same engine functions on the same kind of task. A FreeRTOS queue replaces the UART. The
-pump follows `software/io/network/network_target.cc` at f2e46946:
+In the firmware, the Ultimate owns the TCP connection and moves the ciphertext to the ESP32 in UART RPCs
+(`CMD_TLS_OPEN/STEP/CLOSE/STATS/SET_CA`). Here a FreeRTOS queue replaces the UART, and everything else keeps the
+firmware's shape:
 
-- the handshake: the first step has no input; the input is resent on `ESP_ERR_NO_MEM`; all ciphertext goes out before the next step;
-- STATS right after ESTABLISHED;
-- WRITE as `TLS_STEP_NO_READ` steps;
-- READ with an eager top-up of up to 1,536 B of ciphertext per step;
-- the end of a stream is close_notify or TCP FIN followed by two quiet steps;
-- CLOSE sends the close_notify.
+- **The request and reply buffer is the bridge's.** Every request is a `command_buf_t` laid out per
+  `rpc_calls.h`. The handler writes its reply over it, exactly as `rpc_dispatch.c` does. In particular, STEP's
+  output (`resp->data`, offset 20) overlays its input (`req->data`, offset 12): see `rpc_dispatch.c:407-416`.
+- **Each STEP reply passes the Ultimate's checks.** These are ported from `wifi_tls_take_step()`
+  (`wifi_tls.cc:176-241`):
+  - exact size;
+  - a state is present;
+  - `fail_reason` only with FAILED;
+  - ct/pt within the Ultimate's 1,536/1,024 B buffers;
+  - no plaintext from a NO_READ step, and none outside ESTABLISHED/CLOSED;
+  - NO_MEM is "again" while live, and "closed" once CLOSED.
 
-What it does not exercise: the UART transport, the RPC framing and its timeouts, and the Ultimate's
-reset/cancel paths.
+  A violation fails the case as `contract-violation`.
+- **The pump follows `network_target.cc`:**
+  - the handshake (`:1336`): the first step has no input; the input is resent on NO_MEM; all ciphertext goes out
+    before the next step; STATS after ESTABLISHED;
+  - WRITE (`:2070`): NO_READ steps;
+  - READ (`:1921`): an eager top-up of up to 1,536 B per step; the end is close_notify, or TCP FIN followed by two
+    quiet steps;
+  - CLOSE: the close_notify is sent.
+
+The line numbers are at f2e46946.
+
+What it does not exercise:
+- the UART transport, the RPC framing and its timeouts;
+- the Ultimate's reset and cancel paths;
+- the stack frames of the bridge's dispatcher around the handlers.
 
 ### Configuration
-`sdkconfig` is the bridge's own `software/wifi/raw_u64/sdkconfig` at f2e46946 with these changes and no others
-(`tools/make_sdkconfig.py`; `tools/diff_sdkconfig.sh` prints the diff):
+`tools/make_sdkconfig.py` writes `sdkconfig` as the engine commit's own `software/wifi/raw_u64/sdkconfig` with
+these changes. `tools/diff_sdkconfig.sh` prints the whole diff (it is in every run's evidence).
 
 | Option | Why |
 |---|---|
-| `ESPTOOLPY_FLASHSIZE` 2MB → 4MB, `PARTITION_TABLE_SINGLE_APP_LARGE` | QEMU needs a 2/4/8/16 MB image; this image also carries open_eth and SNTP; a dev board has 4 MB |
+| `ESPTOOLPY_FLASHSIZE` 2MB → 4MB, `PARTITION_TABLE_SINGLE_APP_LARGE` | QEMU needs a 2/4/8/16 MB image; the app also carries open_eth and SNTP; a dev board has 4 MB |
 | `ETH_USE_OPENETH=y` | QEMU's NIC |
 | `HEAP_USE_HOOKS=y` | to measure the largest single allocation on the TLS task |
 | `MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH` | the same `cacert.pem`, reached from this project |
 
-No other `CONFIG_MBEDTLS_` option differs.
+Two more differences come from regeneration, not from choice:
+- the bridge's `EXAMPLE_*` options disappear, because its `Kconfig.projbuild` is not part of this app;
+- the bundle path is the only `CONFIG_MBEDTLS_` difference.
+
+## The test oracle
+Each case prints a `RESULT` line and a `CASE <name> gate|info PASS|FAIL (why)` line. The run ends with
+`SUMMARY` and **`VERDICT GREEN|RED`**.
+
+- **Gate cases** are the local OpenSSL servers (deterministic). VERDICT is GREEN only if every gate case passes.
+- **Info cases** are public hosts. They are informational, because a host can change its certificate, its TLS
+  versions or its replies without the engine changing.
+- **A success case passes only if all of these hold:**
+  - the session reached ESTABLISHED with the expected TLS version and clock source;
+  - the HTTP status is 200;
+  - the session **ended with close_notify**, unless that case explicitly accepts another end, and any other end
+    also needs a matching Content-Length;
+  - the body length equals `Content-Length` whenever the server sends one;
+  - for the local 256 KiB download (`tools/mkblob.py`, deterministic), the body is **exactly 262,144 B with the
+    expected SHA-256** (`certs/blob.h`).
+- **A failure case passes only on the expected failure:** the fail reason, the verify-flag bits, and the alert
+  where one is named (alert 70 for REQUIRE_TLS13 against TLS 1.2).
+- **Ends are classified explicitly:** close-notify, tcp-fin-no-notify, rx-error, idle-timeout, read-timeout,
+  tls-failed, error. Each RESULT line also counts the NO_MEM resend steps (`again_steps`).
+
+### Red/green
+`tools/redgreen.sh <dir>` makes three runs:
+- the clean engine, which must be **GREEN**;
+- `mut1`, which must be **RED**: it drops all plaintext after 4 KiB;
+- `mut2`, which must be **RED**: it writes the step output before consuming the input, which corrupts it under
+  the bridge's overlay.
+
+Each mutant is applied by `tools/mutate.py` to a **copy** of the engine. The engine check allows exactly that one
+changed file and labels the build and the console `MUTANT`.
 
 ## Build and run in QEMU (no hardware)
-
-Requires Docker. `$HOME/Documents` is mounted read-only at the same path. `engine` must point at a checkout of
-f2e46946 (here: `git worktree add --detach ../1541u-wt/standalone-engine f2e46946`).
+Requires Docker and git.
 
 ```
-tools/docker.sh <logdir>
+ENGINE_URL_ENV=<clone or url> tools/fetch_engine.sh     # ./engine at ENGINE_SHA
+tools/docker.sh <logdir> [mut1|mut2]                  # one run
+tools/redgreen.sh <logdir>                            # clean GREEN + both mutants RED
 ```
 
-This builds the image, starts the local test servers (`tools/servers.sh`), runs the image in
-`qemu-system-xtensa -M esp32` with user-mode networking (QEMU's host is 10.0.2.2), stops at `STANDALONE_DONE`,
-and writes `<logdir>/results.md`.
+`docker.sh` uses `espressif/idf` v6.0.3, pinned per architecture:
+- arm64: `sha256:da1f22c157dcb4f684f822ff37be17dc0abef82160d889bfd7fd23cc1299f0fa`
+- amd64: `sha256:01ab23e20744721378d1dd9d0fff4fe15e2edd8bd5cdaf02d24597f4ade05a1e`
 
-**QEMU timings are not hardware timings.** QEMU does not emulate the ESP32's clock: code runs as fast as the
-host's emulation of Xtensa allows, and the crypto accelerators are QEMU models. Heap and stack figures do
-transfer to hardware (same code, same allocator), apart from interrupt nesting on the stack.
+Both come from the index `sha256:54278f2c…`. The two are different toolchain and QEMU builds; our runs used
+arm64.
+
+Only the repo (as `/work`) and the log directory (as `/out`) are mounted. Each run then:
+- writes `sdkconfig` and builds;
+- starts the local servers (`tools/servers.sh`, including an SNTP server, so a run does not depend on public NTP);
+- runs `qemu-system-xtensa -M esp32` with user-mode networking (QEMU's host is 10.0.2.2) until `STANDALONE_DONE`;
+- writes `<logdir>/results.md`.
+
+**QEMU timings are not hardware timings.** QEMU does not model the ESP32's clock, and the crypto accelerators are
+QEMU models. Treat every time as a comparison between cases only. Between our runs, the same case varied by up to
+4x with host load.
+
+**The QEMU heap has no Wi-Fi driver.** The firmware runs Wi-Fi and its buffers, so its free heap and its
+fragmentation differ. Of the heap figures, only the per-session use (peak minus baseline) carries over, and even
+that includes lwIP's open_eth buffers. The stack figure is the worst of the cases run, without silicon interrupt
+nesting.
 
 ## Run on a classic ESP32 dev board (not done yet)
+The same image runs on a classic ESP32 (ESP32-D0WD, 4 MB flash; the U64's module is a classic ESP32) over Wi-Fi.
+The app reads its settings from NVS (namespace `standalone`):
+- `ssid` and `pass`: with no credentials it takes the QEMU path;
+- `local`: the LAN host running the servers;
+- `ntp` (optional): the default is pool.ntp.org.
 
-The same image runs on a classic ESP32 (ESP32-D0WD, 4 MB flash; the U64's module is a classic ESP32) over
-Wi-Fi. The app reads the Wi-Fi credentials from NVS; with no credentials it takes the QEMU path.
+On a board the entropy gate is real: `entropy_source()` reports RADIO only after `esp_wifi_start()` succeeds.
 
-1. Start the local servers on a LAN host with OpenSSL 3 and python3: `tools/servers.sh start /tmp/srv`.
-2. Write an NVS image with the credentials and that host's address:
+1. On a LAN host with OpenSSL 3 and python3, as root for UDP 123 (or set `NTP_PORT` and NVS `ntp`), run
+   `tools/servers.sh start /tmp/srv`.
+2. Write the NVS image:
    ```
    cat > nvs.csv <<EOF
    key,type,encoding,value
@@ -89,43 +182,39 @@ Wi-Fi. The app reads the Wi-Fi credentials from NVS; with no credentials it take
    ssid,data,string,<SSID>
    pass,data,string,<password>
    local,data,string,<LAN host IP>
+   ntp,data,string,<LAN host IP or pool.ntp.org>
    EOF
    python $IDF_PATH/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py generate nvs.csv nvs.bin 0x6000
    ```
-3. Flash the image built above (`build/`) and the NVS image (`nvs` is at 0x9000 in the single-app-large table):
+3. Flash the image built above and the NVS image (`nvs` is at 0x9000 in the single-app-large table; check it in
+   `build/partition_table`):
    ```
    python -m esptool --chip esp32 -p <port> -b 460800 write-flash --flash-mode dio --flash-size 4MB --flash-freq 40m \
        0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin \
        0x10000 build/tls_standalone.bin 0x9000 nvs.bin
    ```
-4. Capture the console at 115200 baud (`idf.py -p <port> monitor`, or any serial terminal) until `STANDALONE_DONE`,
-   save it, then run `grep -E '^(RESULT|CASE|SUMMARY)' log > results.txt; tools/results.py results.txt`.
+4. Capture the console at 115200 baud until `STANDALONE_DONE`, then run
+   `grep -E '^(RESULT|CASE|SUMMARY|VERDICT)' log > results.txt; tools/results.py results.txt`.
 5. Stop the servers: `tools/servers.sh stop /tmp/srv`.
 
-On a board the entropy gate is real: `entropy_source()` reports RADIO only after `esp_wifi_start()` succeeds,
-as in the bridge. In QEMU there is no radio, so the open_eth path reports RADIO as a declared stub.
-
 ## Cases
-Each case prints a `RESULT` line and a `CASE … PASS|FAIL` line that checks the result against the case's
-expectation.
-
-- Public hosts (Mozilla bundle):
-  - en.wikipedia.org `/wiki/Commodore_64` (about 750 KB, the throughput case), github.com, example.com: ECDSA, TLS 1.3;
-  - www.gnu.org: RSA-2048, TLS 1.3;
-  - www.debian.org: RSA-4096, TLS 1.3;
-  - www.c64-wiki.com (ECDHE-RSA) and www.craigslist.org (ECDHE-ECDSA): TLS 1.2 with EMS;
-  - tls-v1-2.badssl.com:1012: TLS 1.2 without EMS, which the engine refuses;
-  - www.c64-wiki.com with REQUIRE_TLS13, which must fail.
-- Local OpenSSL servers (private CA uploaded as trust CUSTOM):
-  - TLS 1.3 and TLS 1.2, each with a 256 KiB download;
+- **Info (public hosts, Mozilla bundle):**
+  - TLS 1.3: en.wikipedia.org `/wiki/Commodore_64` (about 750 KB), github.com, example.com (all ECDSA); www.gnu.org (RSA-2048); www.debian.org (RSA-4096);
+  - TLS 1.2 with EMS: www.c64-wiki.com (ECDHE-RSA) and www.craigslist.org (ECDHE-ECDSA). Craigslist needs HTTP/1.1 and leaves the connection open, so it accepts an idle end, and only together with a Content-Length match;
+  - tls-v1-2.badssl.com:1012 (TLS 1.2 without EMS: refused);
+  - c64-wiki with REQUIRE_TLS13 (alert 70).
+- **Gate (local OpenSSL servers, private CA uploaded as trust CUSTOM):**
+  - TLS 1.3 and TLS 1.2 256 KiB downloads (SHA-256 checked);
   - wrong host name, self-signed (CUSTOM and BUNDLE), expired;
-  - TLS 1.2 without EMS, and REQUIRE_TLS13 against a TLS 1.2 server;
-  - PIN (right and wrong key);
-  - OPEN without a clock (refused NO_TIME).
-- Two sessions at once (the engine's maximum): a local session established and idle while the Wikipedia download runs.
+  - TLS 1.2 without EMS, and REQUIRE_TLS13 against TLS 1.2;
+  - PIN, right key (download checked) and wrong key;
+  - OPEN without a clock (NO_TIME);
+  - OPEN without entropy (stub flipped: NO_ENTROPY);
+  - the engine's own-SNTP clock branch (stub flipped: time source SNTP, download checked);
+  - **two sessions at once** (the engine's maximum): the handshakes run one after the other, then both 256 KiB downloads run **interleaved step by step**, both checked.
 
-The engine is a client only: it has no server mode, so the "incoming server" Gideon mentioned is not part of
-this app.
+`certs/` holds a test PKI generated by `tools/mkcerts.sh` (OpenSSL ≥ 3.4). The keys are committed and protect
+nothing. **Never install `certs/ca.pem` in a trust store.**
 
 ## Results
-See `RESULTS.md`, which records which run and which image produced them.
+See `RESULTS.md`, which records which run, which engine and which image produced them.
