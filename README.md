@@ -69,8 +69,15 @@ To test another commit, set `ENGINE_SHA`, fetch and build. Two things follow tha
 
   The firmware regions must equal the references in `tools/transcriptions/*.ref` that the copies were made from,
   and each copy must differ from its reference by exactly the declared delta in `tools/transcriptions/*.delta`.
-  Any other difference fails the build. A commit without those files (for example one that carries the engine but
-  not yet the Ultimate side) fails too. Updating the copies is a reviewed change (`--update`), never automatic.
+  Any other difference fails the build. Updating the copies is a reviewed change (`--update`), never automatic.
+  `tools/drift_check.py` is this check's own red/green: five drift mutants (three in the firmware sources, two in
+  the copies) must fail it, and a comment-only firmware change must pass.
+
+  **The transcription check requires the `ENGINE_SHA` commit to contain all three source files** (`rpc_dispatch.c`,
+  `wifi_tls.cc` and `network_target.cc`). Without them it cannot show that the bridge handlers and the Ultimate's
+  checks the app reproduces are the ones that ship with that engine, so a commit with only the engine fails. To
+  test the engine of a PR series that adds these files in later PRs, run it at the tip that contains the engine
+  and the bridge and Ultimate code together.
 
 ### How the engine is driven
 In the firmware, the Ultimate owns the TCP connection and moves the ciphertext to the ESP32 in UART RPCs
