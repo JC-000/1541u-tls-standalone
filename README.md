@@ -52,9 +52,8 @@ starts from the bridge's sdkconfig.
 
 ### Which engine, and re-pointing it
 `engine.env` holds `ENGINE_URL` and `ENGINE_SHA`.
-- **`ENGINE_URL` is a placeholder, `[SOURCE BRANCH LINK]`.** It is filled in when the engine's branch is published;
-  until then this repository cannot be built by anyone else, and it is not to be published before that.
-  `ENGINE_URL_ENV=<clone or url>` overrides it.
+- `ENGINE_URL` is https://github.com/JC-000/1541ultimate.git; `ENGINE_SHA` is on its `esp32-tls-offload` branch.
+  `ENGINE_URL_ENV=<clone or url>` overrides the URL (a mirror or a local clone).
 - `tools/fetch_engine.sh` fetches that commit into `./engine` (sparse, depth 1).
 - `tools/check_engine.cmake` refuses a checkout at another commit, or one with any file changed or added (ignored
   files included). It runs at configure and again at every build, before `main` is compiled, so an incremental
@@ -199,7 +198,7 @@ Requires Docker, git and python3 on the host (`redgreen.sh` stops without python
 - On Linux the container runs as root and writes `build/` and `sdkconfig` into the checkout as root.
 
 ```
-ENGINE_URL_ENV=<clone or url> tools/fetch_engine.sh     # ./engine at ENGINE_SHA
+tools/fetch_engine.sh                                 # ./engine at ENGINE_SHA, from ENGINE_URL
 tools/docker.sh <logdir> [mutant]                     # one run
 tools/redgreen.sh <logdir>                            # clean GREEN + every required mutant RED
 python3 tools/drift_check.py                          # the transcription check's own reds (no Docker)
