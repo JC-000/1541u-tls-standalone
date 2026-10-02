@@ -1,10 +1,16 @@
 #!/bin/bash
-# docker.sh <logdir>: run_qemu.sh in espressif/idf:v6.0.3. $HOME/Documents is mounted read-only at the same path, so
-# the "engine" symlink and its git worktree resolve inside the container; only this repo and <logdir> are writable.
+# docker.sh <logdir> [mut1|mut2]: run_qemu.sh in espressif/idf:v6.0.3, the image for this machine's architecture
+# pinned by digest. Only the repo (as /work, with ./engine from tools/fetch_engine.sh) and <logdir> (as /out) are
+# mounted.
 set -u
 APP=$(cd "$(dirname "$0")/.." && pwd)
-IMAGE=espressif/idf:v6.0.3@sha256:54278f2c01e6e759502e2f04c9103589c17528923426f4d63193490c7a08f555
+case "$(uname -m)" in
+    arm64|aarch64) DIGEST=sha256:da1f22c157dcb4f684f822ff37be17dc0abef82160d889bfd7fd23cc1299f0fa ;;
+    x86_64|amd64)  DIGEST=sha256:01ab23e20744721378d1dd9d0fff4fe15e2edd8bd5cdaf02d24597f4ade05a1e ;;
+    *) echo "no pinned image for $(uname -m)" >&2; exit 1 ;;
+esac
 mkdir -p "$1"
 LOG=$(cd "$1" && pwd)
-docker run --rm -v "$HOME/Documents:$HOME/Documents:ro" -v "$APP:$APP" -v "$LOG:$LOG" -w "$APP" "$IMAGE" \
-    bash tools/run_qemu.sh "$LOG"
+echo "image espressif/idf@$DIGEST (v6.0.3, $(uname -m))" > "$LOG/image.txt"
+docker run --rm -e MUTANT="${2:-}" -v "$APP:/work" -v "$LOG:/out" -w /work "espressif/idf@$DIGEST" \
+    bash tools/run_qemu.sh /out

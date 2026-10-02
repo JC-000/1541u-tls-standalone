@@ -3,7 +3,8 @@
 #   8443 TLS 1.3, CA-issued leaf for tls.test      8444 the same, TLS 1.2 only
 #   8445 TLS 1.3, leaf for other.test (wrong name)  8446 TLS 1.3, self-signed leaf for tls.test
 #   8447 TLS 1.3, expired leaf                      8448 TLS 1.2 without the extended master secret
-# -WWW serves blob.bin (256 KiB of random bytes) for the throughput cases. PIDs go to <logdir>/pids.txt.
+#   UDP 123 (NTP_PORT) SNTP from this machine's clock
+# -WWW serves blob.bin (tools/mkblob.py: 256 KiB, SHA-256 in certs/blob.h). PIDs go to <logdir>/pids.txt.
 set -u
 CMD=$1
 LOG=$2
@@ -12,12 +13,12 @@ T=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$LOG"
 if [ "$CMD" = stop ]; then
     [ -f "$LOG/pids.txt" ] && for pid in $(awk '{print $1}' "$LOG/pids.txt"); do kill "$pid" 2>/dev/null; done
+    rm -rf "$LOG/www"
     exit 0
 fi
 WWW="$LOG/www"
 mkdir -p "$WWW"
-head -c 262144 /dev/urandom > "$WWW/blob.bin"
-(cd "$WWW" && sha256sum blob.bin 2>/dev/null || shasum -a 256 blob.bin) > "$LOG/blob.sha256"
+python3 "$T/mkblob.py" "$WWW/blob.bin" > "$LOG/blob.sha256"
 : > "$LOG/pids.txt"
 srv() { # port cert key options...
     local port=$1 cert=$2 key=$3; shift 3
@@ -32,6 +33,8 @@ srv 8446 selfsigned.pem selfsigned.key.pem -tls1_3
 srv 8447 expired.pem expired.key.pem -tls1_3
 python3 "$T/noems_server.py" 8448 "$C/good.pem" "$C/good.key.pem" > "$LOG/server-8448.log" 2>&1 &
 echo "$! noems_server.py 8448" >> "$LOG/pids.txt"
+python3 "$T/sntp_server.py" "${NTP_PORT:-123}" > "$LOG/server-ntp.log" 2>&1 &
+echo "$! sntp_server.py ${NTP_PORT:-123}" >> "$LOG/pids.txt"
 sleep 2
 # Controls: what each server really negotiates, seen by OpenSSL's own client
 : > "$LOG/controls.txt"

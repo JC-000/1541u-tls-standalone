@@ -1,5 +1,5 @@
 #!/bin/bash
-# diff_sdkconfig.sh: every option that differs between this app's sdkconfig and the firmware bridge's (f2e46946)
+# diff_sdkconfig.sh: every option that differs between this app's sdkconfig and the firmware bridge's (the engine checkout, engine.env ENGINE_SHA)
 cd "$(dirname "$0")/.."
 norm() { grep -E '^(CONFIG_|# CONFIG_.* is not set)' "$1" | sort; }
 diff <(norm engine/software/wifi/raw_u64/sdkconfig) <(norm sdkconfig)

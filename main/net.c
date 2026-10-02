@@ -114,9 +114,9 @@ const char *net_start(void)
     return path;
 }
 
-bool net_sntp(int timeout_ms)
+bool net_sntp(const char *server, int timeout_ms)
 {
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(server);
     esp_netif_sntp_init(&config);
     return esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms)) == ESP_OK;
 }

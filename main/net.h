@@ -16,7 +16,7 @@ extern volatile bool net_entropy_stubbed;
 
 // Returns the name of the path taken ("wifi" or "qemu-openeth"), or NULL on failure
 const char *net_start(void);
-// Waits for SNTP; true once the clock is set
-bool net_sntp(int timeout_ms);
+// Waits for SNTP from server (a name or an address); true once the clock is set
+bool net_sntp(const char *server, int timeout_ms);
 
 #endif /* NET_H_ */
